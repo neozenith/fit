@@ -6,6 +6,7 @@ import {
 } from "@aws-sdk/client-athena";
 import type { z } from "zod";
 import { FINOPS_DATABASE, FINOPS_WORKGROUP, REGION } from "./const.js";
+import { isCatalogueMissing } from "./finops-errors.js";
 import type { finopsQuerySchema } from "./schemas.js";
 
 /**
@@ -109,7 +110,20 @@ export const queryFinops = async (query: FinopsQuery) => {
       ? `AND resource_tags_user_environment = '${query.environment}'`
       : "";
 
-  const rows = await runQuery(`
+  // The CUR table does not exist until the global stack has been applied AND
+  // its crawler has run over at least one delivered export — which is hours
+  // after the stack applies, and up to a day after a brand-new account starts
+  // accruing cost.
+  //
+  // That window is a NORMAL state, not a fault, so it must not be a 502. But
+  // the catch below is deliberately NARROW: only a missing table or database is
+  // translated into "not available yet". A permissions error, a byte-cap
+  // rejection or a malformed query still throws, because each of those is a
+  // real defect and hiding it behind "no data yet" is exactly how a broken
+  // FinOps page looks healthy for a month.
+  let rows: Record<string, string>[];
+  try {
+    rows = await runQuery(`
     SELECT
       billing_period,
       ${column} AS grouping_key,
@@ -121,6 +135,16 @@ export const queryFinops = async (query: FinopsQuery) => {
     GROUP BY billing_period, ${column}
     ORDER BY billing_period, cost DESC
   `);
+  } catch (error) {
+    if (!isCatalogueMissing(error)) throw error;
+    return {
+      available: false,
+      reason:
+        "The cost catalogue has no data yet. The export lands within a few hours of the " +
+        "FinOps stack being applied, and the crawler registers it shortly after.",
+      rows: [],
+    };
+  }
 
   return {
     available: true,

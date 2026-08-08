@@ -23,27 +23,44 @@ export const test = base.extend<{ env: EnvName }>({
     await use((testInfo.project.metadata as { env: EnvName }).env);
   },
 
-  context: async ({ context, env }, use) => {
+  context: async ({ context, env, baseURL }, use) => {
     const session = await mintSession(env);
 
     if (env === "local") {
       // No edge locally, so the API is given the identity headers directly.
       // This is the ONLY place that works — see auth.ts.
       await context.setExtraHTTPHeaders(session.headers);
-    } else {
-      const url = new URL(context.pages()[0]?.url() ?? "https://fit.jpeak.ai");
-      await context.addCookies([
-        {
-          name: "__session",
-          value: session.cookie,
-          domain: new URL(process.env["PW_BASE_URL"] ?? url.origin).hostname,
-          path: "/",
-          secure: true,
-          httpOnly: true,
-          sameSite: "Lax",
-        },
-      ]);
+      await use(context);
+      return;
     }
+
+    // The cookie domain comes from the PROJECT'S OWN baseURL, and nothing else.
+    //
+    // An earlier version derived it from `context.pages()[0]?.url()` with a
+    // hardcoded fallback. On a fresh context there are no pages, so every
+    // environment fell through to that fallback — the cookie was set on the
+    // production hostname and simply never sent to dev or test. The API tests
+    // still passed (they build their own requests), so the failure showed up
+    // only as "the page did not render", which points at the application
+    // rather than at the credential.
+    if (!baseURL) {
+      throw new Error(
+        `No baseURL for project '${env}'. The session cookie has no domain to bind to, ` +
+          "and would silently not be sent.",
+      );
+    }
+
+    await context.addCookies([
+      {
+        name: "__session",
+        value: session.cookie,
+        domain: new URL(baseURL).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
 
     await use(context);
   },

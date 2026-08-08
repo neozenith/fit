@@ -57,7 +57,9 @@ const injectIdentity = (request, config, session) => {
 const redirect = (location, cookies = []) =>
   respond(302, "Found", "", {
     location,
-    ...(cookies.length ? { "set-cookie": cookies.map((c) => ({ key: "Set-Cookie", value: c })) } : {}),
+    ...(cookies.length
+      ? { "set-cookie": cookies.map((c) => ({ key: "Set-Cookie", value: c })) }
+      : {}),
   });
 
 // --- OAuth handlers ----------------------------------------------------------

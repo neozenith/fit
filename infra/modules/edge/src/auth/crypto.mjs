@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual, createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 /**
  * Signing primitives shared by the session cookie, the transaction cookie and
@@ -76,5 +76,4 @@ export const verify = (key, token, { now = Date.now() } = {}) => {
 export const nonce = (bytes = 32) => b64url(randomBytes(bytes));
 
 /** PKCE S256 challenge for a verifier. */
-export const pkceChallenge = (verifier) =>
-  b64url(createHash("sha256").update(verifier).digest());
+export const pkceChallenge = (verifier) => b64url(createHash("sha256").update(verifier).digest());

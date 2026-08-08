@@ -282,7 +282,12 @@ const getProgress = async (ctx: Context): Promise<Response> => {
       ([, label]) => label.toLowerCase() === r.exercise.toLowerCase(),
     )?.[0];
     if (!lift) continue;
-    (series[lift] ??= []).push({
+    let points = series[lift];
+    if (!points) {
+      points = [];
+      series[lift] = points;
+    }
+    points.push({
       date: r.timestamp.slice(0, 10),
       estimated: Math.round(estimatedOneRepMax(r.weight, r.reps) * 10) / 10,
     });

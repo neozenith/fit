@@ -73,7 +73,9 @@ describe("host validation", () => {
 
 describe("redirect_uri follows the viewer's host, but only a VALIDATED one", () => {
   test("an admitted host is used verbatim", () => {
-    expect(redirectUri("fit-alt.jpeak.ai", CONFIG)).toBe("https://fit-alt.jpeak.ai/oauth2/callback");
+    expect(redirectUri("fit-alt.jpeak.ai", CONFIG)).toBe(
+      "https://fit-alt.jpeak.ai/oauth2/callback",
+    );
   });
 
   test("an unknown host falls back to the fqdn rather than becoming an open redirect", () => {
@@ -141,12 +143,18 @@ describe("signed tokens", () => {
 
   // One row per case — a single row of six columns would only ever test the
   // first, which is the classic way a table-driven test quietly stops testing.
-  test.each([[""], ["no-dot"], ["a.b.c."], [".sig"], [null], [undefined], [42], [{}]])(
-    "malformed input %p is rejected",
-    (t) => {
-      expect(verify(KEY, t)).toBeNull();
-    },
-  );
+  test.each([
+    [""],
+    ["no-dot"],
+    ["a.b.c."],
+    [".sig"],
+    [null],
+    [undefined],
+    [42],
+    [{}],
+  ])("malformed input %p is rejected", (t) => {
+    expect(verify(KEY, t)).toBeNull();
+  });
 });
 
 describe("crypto primitives", () => {

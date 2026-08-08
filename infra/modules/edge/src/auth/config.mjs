@@ -1,4 +1,4 @@
-import { SSMClient, GetParametersByPathCommand } from "@aws-sdk/client-ssm";
+import { GetParametersByPathCommand, SSMClient } from "@aws-sdk/client-ssm";
 import bundled from "./config.json" with { type: "json" };
 
 /**

@@ -1,0 +1,22 @@
+# Edge stack configuration.
+#
+# Changes rarely and propagates slowly (a distribution update takes ~15
+# minutes), which is why it is separate from the API that deploys many times a
+# day (ADR-0008).
+
+app_name: fit
+region: ap-southeast-2
+dns_apex: jpeak.ai
+
+environments:
+  dev:
+    fqdn: fit-dev.jpeak.ai
+    extra_hosts: []
+  test:
+    fqdn: fit-test.jpeak.ai
+    extra_hosts: []
+  prod:
+    fqdn: fit.jpeak.ai
+    # Every entry here must ALSO be a registered redirect URI on the identity
+    # provider, because the OAuth redirect follows the viewer's host.
+    extra_hosts: []

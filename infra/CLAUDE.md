@@ -93,3 +93,26 @@ module that knows about `config.yml` cannot be reused by a second stack.
 
 Secrets never go here. They are generated in `identity`, or arrive as a shell
 parameter seeded out of band.
+
+## Bootstrap ordering, and the one way to get it wrong
+
+`make entra` **must run after** the `identity` stack has applied for an
+environment, not before.
+
+The identity stack creates `/fit/{env}/auth/entra/client_secret` as a shell
+holding `UNSEEDED` and then ignores changes to its value; `entra_app.sh`
+overwrites that value and nothing else. Run in the other order, the script
+creates the parameter and the identity stack's next apply dies with
+`ParameterAlreadyExists` — permanently, because Terraform will not adopt a
+resource it did not create. Recovering means a state import or deleting the
+parameter.
+
+The script now refuses to create a parameter and names the fix instead. The
+correct sequence for a fresh environment is:
+
+```sh
+make bootstrap                 # once per account/app
+make github-environments       # once per repo
+make cold-start ENV=dev        # identity -> data -> api -> edge -> archive -> frontend
+make entra                     # AFTER identity exists; re-run seeds all three envs
+```

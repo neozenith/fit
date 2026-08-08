@@ -75,9 +75,16 @@ resource "aws_dynamodb_table" "table" {
   }
 
   tags = {
-    Name        = "${var.name_prefix}-${each.key}"
-    Description = each.value.description
-    AgesOut     = tostring(each.value.ages_out)
+    Name = "${var.name_prefix}-${each.key}"
+    # `AgesOut` is a tag because it is a FACT AN OPERATOR FILTERS ON — "show me
+    # every table the archive job touches" is a real question.
+    #
+    # `description` is deliberately NOT a tag. It was, and AWS rejected the
+    # apply: tag values reject the punctuation ordinary prose is full of, so a
+    # perfectly good sentence becomes `ValidationException: The Tag Value
+    # provided is invalid`. Prose belongs in the `locals` block above, where it
+    # is read by people rather than validated by an API.
+    AgesOut = tostring(each.value.ages_out)
   }
 }
 

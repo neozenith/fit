@@ -97,10 +97,24 @@ else
 
   for entry in "${ENV_HOSTS[@]}"; do
     env_name="${entry%%|*}"
+    param="/${APP_NAME}/${env_name}/auth/entra/client_secret"
+
+    # The shell MUST already exist, created by the identity stack. This script
+    # only ever overwrites a value; it never creates the parameter.
+    #
+    # That ordering is not fussiness — it is the fix for a real failure. Run
+    # the other way round, this script creates the parameter and the identity
+    # stack's next apply dies with `ParameterAlreadyExists`, permanently,
+    # because Terraform will not adopt a resource it did not create. Failing
+    # loudly here costs one clear message; the alternative costs a state import.
+    if ! aws_ ssm get-parameter --name "${param}" >/dev/null 2>&1; then
+      die "${param} does not exist yet. Apply the identity stack for '${env_name}' first (make cold-start ENV=${env_name}), then re-run this."
+    fi
+
     aws_ ssm put-parameter \
-      --name "/${APP_NAME}/${env_name}/auth/entra/client_secret" \
+      --name "${param}" \
       --value "${SECRET}" --type SecureString --overwrite >/dev/null
-    sub "seeded /${APP_NAME}/${env_name}/auth/entra/client_secret"
+    sub "seeded ${param}"
   done
 
   unset SECRET

@@ -5,7 +5,8 @@
     // callbacks are type-checked as browser code, because that is where they
     // actually run.
     "lib": ["ES2023", "DOM"],
-    "types": ["node"],
+    // Both: the test harness runs on Node, but screenshots.ts is a Bun script.
+    "types": ["node", "bun"],
     "noEmit": true,
     // Playwright's config type does not model `workers: undefined`, which is
     // the documented way to say "use the default". Relaxing this one flag for

@@ -56,7 +56,15 @@ lint: ## Lint TypeScript
 
 .PHONY: typecheck
 typecheck: ## Typecheck every TypeScript workspace
+	# EVERY workspace, and the list must match app-ci.yml. An earlier version
+	# checked only packages/program, so `make ci` went green locally while CI
+	# failed on a type error in tools/ — which is the exact failure mode a local
+	# gate exists to prevent.
 	bun run --cwd packages/program typecheck
+	bun run --cwd api typecheck
+	bun run --cwd frontend typecheck
+	bun run --cwd tools typecheck
+	bun run --cwd e2e typecheck
 
 .PHONY: test
 test: ## Run unit tests

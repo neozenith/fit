@@ -23,10 +23,16 @@ const spawn = (name: string, cmd: string[], env: Record<string, string>): Subpro
     env: { ...process.env, ...env },
     stdout: "inherit",
     stderr: "inherit",
-    onExit(_proc, exitCode, signal) {
-      // A child dying is not something to survive: half the stack running is
-      // more confusing than none of it. Take the whole thing down and say why.
-      if (signal === "SIGTERM" || signal === "SIGINT") return;
+    onExit(_proc, exitCode, signalCode) {
+      // Bun reports the signal as a NUMBER, not a name — comparing it to
+      // "SIGTERM" is always false, so the shutdown path would cascade into
+      // itself and report a spurious failure on every clean Ctrl-C.
+      //
+      // Any non-null signal here means we killed it, which is the normal exit.
+      if (signalCode !== null || shuttingDown) return;
+
+      // A child dying on its own is not something to survive: half the stack
+      // running is more confusing than none of it. Take it all down, and say why.
       console.error(`\n[dev] ${name} exited with code ${exitCode} — stopping everything.`);
       shutdown(exitCode ?? 1);
     },

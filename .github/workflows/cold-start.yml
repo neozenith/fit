@@ -1,0 +1,183 @@
+name: Cold start
+
+# Apply every stack of ONE environment in dependency order, once.
+#
+# WHY THIS EXISTS:
+#
+# Stacks pass identifiers to each other through SSM (ADR-0008), which means a
+# downstream stack cannot even PLAN until its upstream has APPLIED — the
+# parameter it reads does not exist yet. On a warm environment that is invisible
+# and costs nothing. On a brand-new one it means `api` and `edge` fail their
+# plan with "couldn't find resource", which reads like a broken pipeline and is
+# actually just an empty account.
+#
+# The alternative designs were both worse:
+#
+#   - Let a stack tolerate a missing upstream behind a flag. That puts a
+#     conditional in the plan, so the thing CI shows you is no longer the thing
+#     that will be applied.
+#   - Apply by hand from a laptop. That breaks ADR-0006 outright, and a partial
+#     backend means "by hand" silently targets whichever environment was last
+#     initialised.
+#
+# So: a manual, deliberate, CI-run sequence. It is `workflow_dispatch` only —
+# there is no Git event that should ever trigger a whole-environment apply.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to stand up
+        required: true
+        type: choice
+        options: [dev, test, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cold-start-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  # One job per stack, chained with `needs`, rather than a loop inside one job.
+  # The chain IS the dependency graph, so a reader sees the order in the run
+  # summary and a failure stops everything downstream of it automatically.
+  identity:
+    name: 1. identity
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/terraform
+        with:
+          env: ${{ inputs.environment }}
+          stack: identity
+          action: apply
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+
+  data:
+    name: 2. data
+    needs: identity
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/terraform
+        with:
+          env: ${{ inputs.environment }}
+          stack: data
+          action: apply
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+
+  api:
+    name: 3. api
+    # Reads the table names `data` published.
+    needs: data
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/terraform
+        with:
+          env: ${{ inputs.environment }}
+          stack: api
+          action: apply
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: "true"
+
+  edge:
+    name: 4. edge
+    # Reads the Function URL `api` published. This is the slow one — a new
+    # distribution plus certificate validation takes fifteen minutes or more.
+    needs: api
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/terraform
+        with:
+          env: ${{ inputs.environment }}
+          stack: edge
+          action: apply
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+
+  archive:
+    name: 5. archive
+    # Reads the archive bucket `data` published. Independent of edge, but
+    # sequenced after it so the whole run is one readable chain.
+    needs: edge
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/terraform
+        with:
+          env: ${{ inputs.environment }}
+          stack: archive
+          action: apply
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+
+  frontend:
+    name: 6. frontend
+    needs: edge
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd frontend build
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-coldstart-${{ github.run_id }}
+
+      - name: Publish and verify
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+        run: |
+          BUCKET=$(aws ssm get-parameter --name "/fit/$TARGET_ENV/edge/spa_bucket" --query Parameter.Value --output text)
+          DISTRIBUTION=$(aws ssm get-parameter --name "/fit/$TARGET_ENV/edge/distribution_id" --query Parameter.Value --output text)
+
+          # Assets first with a long cache life, index.html last with none —
+          # reversed, a browser could fetch the new index and then ask for
+          # assets that have not landed.
+          aws s3 sync frontend/dist "s3://$BUCKET" --delete --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp frontend/dist/index.html "s3://$BUCKET/index.html" \
+            --cache-control "no-cache,no-store,must-revalidate"
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" \
+            --paths "/" "/index.html" --query 'Invalidation.Id' --output text
+
+          bun run tools/smoke.ts --env "$TARGET_ENV"
+
+  tags:
+    name: 7. activate cost tags
+    # LAST, and this is the second pass the bootstrap step warns about: a tag
+    # key is only activatable once AWS has observed it on a real resource, and
+    # until this moment there were none. Spend before activation is
+    # unattributable forever (ADR-0014).
+    needs: [archive, frontend]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-tags-${{ github.run_id }}
+      - run: infra/bootstrap/activate_cost_tags.sh
+        env:
+          AWS_PROFILE: ""

@@ -31,6 +31,7 @@ Status values: `Accepted`, `Superseded by ADR-NNNN`, `Proposed`.
 | [0019](#adr-0019--typescript-everywhere-in-the-request-path-python-only-for-analytics) | TypeScript everywhere in the request path, Python only for analytics | Accepted |
 | [0020](#adr-0020--questions-are-queued-never-blocking) | Questions are queued, never blocking | Accepted |
 | [0021](#adr-0021--a-literal-weight-nudge-in-the-source-workbook-means-one-increment) | A literal weight nudge in the source workbook means one increment | Accepted |
+| [0022](#adr-0022--a-cold-environment-is-stood-up-by-one-ordered-ci-run-not-by-relaxing-the-stacks) | A cold environment is stood up by one ordered CI run | Accepted |
 
 ---
 
@@ -594,3 +595,45 @@ the mismatch.
 > weight. Any further formula ported from the workbook applies that reading
 > without re-asking. A conditional in the workbook that references an empty cell
 > is a copy/paste slip — find the cell it meant.
+
+---
+
+## ADR-0022 — A cold environment is stood up by one ordered CI run, not by relaxing the stacks
+
+**Status:** Accepted — forced by the first real pipeline run, 2026-08-08
+
+**Context.** Stacks pass identifiers through SSM (ADR-0008), so a downstream
+stack cannot even *plan* until its upstream has *applied* — the parameter it
+reads does not exist yet. On a warm environment this is invisible. On a brand
+new one, `api` and `edge` fail their plan with "couldn't find resource", which
+looks like a broken pipeline and is actually an empty account.
+
+Two obvious fixes were both worse:
+
+- **Let a stack tolerate a missing upstream behind a flag.** That puts a
+  conditional inside the plan, so what CI shows a reviewer is no longer what
+  will be applied — which destroys the property ADR-0006 exists to protect.
+- **Apply by hand from a laptop, once.** That breaks ADR-0006 outright, and
+  with a partial backend "by hand" silently targets whichever environment was
+  last initialised.
+
+**Decision.** A `workflow_dispatch`-only **cold-start workflow** applies one
+environment's stacks in dependency order: `identity → data → api → edge →
+archive → frontend → activate tags`. One job per stack, chained with `needs`,
+so the chain *is* the dependency graph — a reader sees the order in the run
+summary, and a failure stops everything downstream automatically.
+
+It is manual-trigger only. No Git event should ever apply a whole environment.
+
+**Consequences.** The steady-state pipeline stays simple: each stack plans and
+applies independently on its own path filter, with no ordering logic anywhere.
+The ordering exists in exactly one place, is used approximately once per
+environment, and is readable.
+
+The tag-activation second pass lives at the end of this workflow rather than in
+the bootstrap, because a tag key is only activatable after AWS has observed it
+on a real resource — and until the first apply there are none.
+
+> **Lens.** Cold-start ordering is a *workflow* concern, never a *stack*
+> concern. If a stack needs to know whether its upstream exists, the ordering
+> has leaked into the wrong layer.

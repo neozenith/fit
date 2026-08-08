@@ -119,10 +119,15 @@ export const Banner = ({
   variant?: "info" | "error";
 }) => <div className={`banner${variant === "error" ? " banner--error" : ""}`}>{children}</div>;
 
+/**
+ * `<output>` rather than `<p role="status">`.
+ *
+ * It carries the same implicit live-region semantics natively, so a screen
+ * reader announces the change without an ARIA attribute that could drift out of
+ * sync with the element it sits on.
+ */
 export const Loading = ({ what }: { what: string }) => (
-  <p className="muted" role="status">
-    Loading {what}…
-  </p>
+  <output className="muted">Loading {what}…</output>
 );
 
 /**

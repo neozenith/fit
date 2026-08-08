@@ -3,8 +3,8 @@ Description: >-
   PER-APP bootstrap: the layer Terraform cannot self-host (ADR-0004). One stack
   per application repository (stack name <app>-bootstrap), creating the
   Terraform state bucket and the deployer role its GitHub repository assumes via
-  OIDC. Requires github-oidc-baseline to exist in this account first. Deployed
-  and converged by infra/bootstrap/bootstrap_cfn.sh; review with DRYRUN=1.
+  OIDC. Deployed and converged by infra/bootstrap/bootstrap_cfn.sh; review with
+  DRYRUN=1.
 
 Parameters:
   AppName:
@@ -21,6 +21,16 @@ Parameters:
     Type: String
     AllowedPattern: "[A-Za-z0-9_.-]+"
     Description: GitHub repository name, case-sensitive. Only this repo may assume the role.
+  OidcProviderArn:
+    Type: String
+    AllowedPattern: "arn:aws:iam::[0-9]{12}:oidc-provider/.+"
+    Description: >-
+      ARN of the account's GitHub OIDC provider, PASSED IN rather than imported.
+      An account may hold only one provider per issuer URL, so it is frequently
+      pre-existing — created by another application, or by hand years ago. The
+      driver discovers it and adopts it if present, creating it only if absent.
+      An Fn::ImportValue here would make this stack un-deployable in any account
+      where the provider was not created by our own baseline stack.
 
 Resources:
   # --- Terraform state: one bucket per app, key per stack per environment
@@ -83,9 +93,9 @@ Resources:
   # Deployer role. AdministratorAccess is deliberate at this scale: it
   # provisions IAM, CloudFront, Lambda@Edge and DynamoDB, and enumerating that
   # surface would produce a policy that is both enormous and perpetually one
-  # service behind. The blast radius is bounded by the repo-scoped OIDC trust
-  # below, and WHEN it may run per environment is bounded by the GitHub
-  # Environment promotion gates (ADR-0007).
+  # service behind. Blast radius is bounded by the repo-scoped OIDC trust below,
+  # and WHEN it may run per environment is bounded by the GitHub Environment
+  # promotion gates (ADR-0007).
   GitHubDeployerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -97,7 +107,7 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Federated: !ImportValue github-oidc-provider-arn
+              Federated: !Ref OidcProviderArn
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:

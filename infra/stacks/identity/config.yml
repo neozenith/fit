@@ -15,7 +15,7 @@ entra_tenant_id: "89e9e78f-7730-4825-b42f-fb0986fe3088"
 environments:
   dev:
     fqdn: fit-dev.jpeak.ai
-    entra_client_id: "PENDING"
+    entra_client_id: "9f4078bd-0dac-4bb1-9e56-303979d33eb1"
     allowed_users:
       - jp@jpeakai.onmicrosoft.com
     # Short sessions in dev so an expiry bug surfaces during a working day
@@ -23,13 +23,13 @@ environments:
     session_ttl_seconds: 3600
   test:
     fqdn: fit-test.jpeak.ai
-    entra_client_id: "PENDING"
+    entra_client_id: "9f4078bd-0dac-4bb1-9e56-303979d33eb1"
     allowed_users:
       - jp@jpeakai.onmicrosoft.com
     session_ttl_seconds: 28800
   prod:
     fqdn: fit.jpeak.ai
-    entra_client_id: "PENDING"
+    entra_client_id: "9f4078bd-0dac-4bb1-9e56-303979d33eb1"
     allowed_users:
       - jp@jpeakai.onmicrosoft.com
     session_ttl_seconds: 28800

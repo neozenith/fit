@@ -31,16 +31,39 @@ source "${SCRIPT_DIR}/_common.sh"
 
 log "Bootstrapping '${APP_NAME}' (repo ${GITHUB_REPO}) into account ${ACCOUNT_ID} / ${REGION}"
 
-log "Stack 1/2: GitHub OIDC provider (shared by every app in this account)"
-deploy github-oidc-baseline "${SCRIPT_DIR}/cfn/github-oidc.yaml"
+# --- Step 1: the OIDC provider, adopted or created ---------------------------
+#
+# An account may hold only ONE provider per issuer URL, and by the time a second
+# application is bootstrapped that provider usually already exists — created by
+# another app, or by hand years ago. Creating it unconditionally fails with a
+# 409 that rolls the whole stack back.
+#
+# So: discover first, create only if absent, and pass the ARN to step 2 as a
+# parameter rather than via Fn::ImportValue. That decoupling is what lets the
+# per-app stack deploy into an account whose provider we did not create.
 
-log "Stack 2/2: Terraform state bucket + deployer role for '${APP_NAME}'"
+log "Step 1/2: GitHub OIDC provider"
+OIDC_ARN="$(aws_ iam list-open-id-connect-providers \
+  --query "OpenIDConnectProviderList[?ends_with(Arn, ':oidc-provider/token.actions.githubusercontent.com')].Arn | [0]" \
+  --output text 2>/dev/null || echo "None")"
+
+if [ "${OIDC_ARN}" = "None" ] || [ -z "${OIDC_ARN}" ]; then
+  sub "not present — creating it via CloudFormation"
+  deploy github-oidc-baseline "${SCRIPT_DIR}/cfn/github-oidc.yaml"
+  OIDC_ARN="$(output github-oidc-baseline OidcProviderArn)"
+else
+  sub "adopting the existing provider"
+fi
+sub "${OIDC_ARN}"
+
+log "Step 2/2: Terraform state bucket + deployer role for '${APP_NAME}'"
 # The OIDC trust matches on org and repo NAMES, never numeric ids, so the
 # template needs them split rather than as one owner/repo string.
 GITHUB_ORG="${GITHUB_REPO%%/*}"
 REPOSITORY_NAME="${GITHUB_REPO##*/}"
 deploy "${APP_NAME}-bootstrap" "${SCRIPT_DIR}/cfn/tfstate-bootstrap.yaml" \
-  "AppName=${APP_NAME}" "GitHubOrg=${GITHUB_ORG}" "RepositoryName=${REPOSITORY_NAME}"
+  "AppName=${APP_NAME}" "GitHubOrg=${GITHUB_ORG}" "RepositoryName=${REPOSITORY_NAME}" \
+  "OidcProviderArn=${OIDC_ARN}"
 
 [ -n "${DRYRUN}" ] && { log "DRYRUN complete — execute the changesets to apply."; exit 0; }
 

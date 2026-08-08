@@ -10,6 +10,15 @@ import { type EnvName, mintSession } from "./auth.js";
  * application rather than an expired credential.
  */
 export const test = base.extend<{ env: EnvName }>({
+  /*
+   * Playwright PARSES the first parameter's destructuring pattern to discover
+   * which fixtures this one depends on, and rejects a plain identifier at
+   * runtime with "First argument must use the object destructuring pattern".
+   * This fixture depends on none of them — the environment comes from project
+   * metadata — so the empty pattern is the only form that both compiles and
+   * runs, and the rule has to be suppressed rather than satisfied.
+   */
+  // biome-ignore lint/correctness/noEmptyPattern: required by Playwright's fixture parser, see above
   env: async ({}, use, testInfo) => {
     await use((testInfo.project.metadata as { env: EnvName }).env);
   },

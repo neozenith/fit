@@ -1,5 +1,5 @@
 import type { MeasurementRecord } from "@fit/program";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, type WeeklyMedian } from "../api.js";
 import { Banner, formatDate, LineChart, Loading } from "../components.jsx";
 
@@ -20,17 +20,24 @@ export const MeasurementsPage = () => {
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState({ kind: "bodyWeight", value: "" });
 
-  const load = () =>
-    api.measurements().then((r) => {
-      setRecords(r.measurements);
-      setWeekly(r.weekly);
-    });
+  // `useCallback` so the identity is stable across renders. Without it the
+  // effect below would either re-run on every render or need a dependency list
+  // that lies about what it depends on — and a lying dependency list is how a
+  // stale closure gets into a component.
+  const load = useCallback(
+    () =>
+      api.measurements().then((r) => {
+        setRecords(r.measurements);
+        setWeekly(r.weekly);
+      }),
+    [],
+  );
 
   useEffect(() => {
     load()
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, []);
+  }, [load]);
 
   const save = async () => {
     if (draft.value.trim() === "") {

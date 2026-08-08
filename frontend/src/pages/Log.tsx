@@ -1,5 +1,5 @@
 import type { BlockConfig, Session, SetRecord } from "@fit/program";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Banner, formatDate, Loading, repLabel } from "../components.jsx";
 
@@ -21,32 +21,13 @@ export const LogPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const refresh = () => api.sets().then((r) => setRecent(r.sets.slice(0, 40)));
+  // Both callbacks are stabilised so the mount effect can list them honestly.
+  // An effect that claims `[]` while calling a function recreated each render is
+  // how a stale closure gets in — and the version of this that read `sessions`
+  // from an outer scope would have read an empty array on first run.
+  const refresh = useCallback(() => api.sets().then((r) => setRecent(r.sets.slice(0, 40))), []);
 
-  useEffect(() => {
-    Promise.all([api.currentBlock(), api.sets()])
-      .then(([b, s]) => {
-        setBlock(b.block);
-        setSessions(b.sessions);
-        setRecent(s.sets.slice(0, 40));
-
-        // Default to the session nearest today, which is almost always the one
-        // being logged. Picking the first session of the block instead would be
-        // wrong from week two onward.
-        const today = new Date().toISOString().slice(0, 10);
-        const nearest = [...b.sessions].sort(
-          (x, y) =>
-            Math.abs(Date.parse(x.date) - Date.parse(today)) -
-            Math.abs(Date.parse(y.date) - Date.parse(today)),
-        )[0];
-        if (nearest) selectSession(nearest, b.sessions);
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
-    // Mount only — `selectSession` closes over nothing that changes.
-  }, []);
-
-  const selectSession = (session: Session, all: Session[] = sessions) => {
+  const selectSession = useCallback((session: Session) => {
     setSelected(`${session.week}-${session.day}`);
     setDraft(
       session.exercises.flatMap((exercise) =>
@@ -66,8 +47,29 @@ export const LogPage = () => {
         ),
       ),
     );
-    void all;
-  };
+  }, []);
+
+  useEffect(() => {
+    Promise.all([api.currentBlock(), api.sets()])
+      .then(([b, s]) => {
+        setBlock(b.block);
+        setSessions(b.sessions);
+        setRecent(s.sets.slice(0, 40));
+
+        // Default to the session nearest today, which is almost always the one
+        // being logged. Picking the first session of the block instead would be
+        // wrong from week two onward.
+        const today = new Date().toISOString().slice(0, 10);
+        const nearest = [...b.sessions].sort(
+          (x, y) =>
+            Math.abs(Date.parse(x.date) - Date.parse(today)) -
+            Math.abs(Date.parse(y.date) - Date.parse(today)),
+        )[0];
+        if (nearest) selectSession(nearest);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, [selectSession]);
 
   const save = async () => {
     setSaving(true);

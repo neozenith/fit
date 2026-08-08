@@ -30,6 +30,7 @@ Status values: `Accepted`, `Superseded by ADR-NNNN`, `Proposed`.
 | [0018](#adr-0018--single-tenant-single-user-by-construction) | Single-tenant, single-user by construction | Accepted |
 | [0019](#adr-0019--typescript-everywhere-in-the-request-path-python-only-for-analytics) | TypeScript everywhere in the request path, Python only for analytics | Accepted |
 | [0020](#adr-0020--questions-are-queued-never-blocking) | Questions are queued, never blocking | Accepted |
+| [0021](#adr-0021--a-literal-weight-nudge-in-the-source-workbook-means-one-increment) | A literal weight nudge in the source workbook means one increment | Accepted |
 
 ---
 
@@ -557,3 +558,39 @@ list of *reversible commitments*, not a list of blockers.
 rework, or the assumption would have been a blocker instead.
 
 > **Lens.** Never stop to ask. Decide, record the assumption, continue.
+
+---
+
+## ADR-0021 — A literal weight nudge in the source workbook means one increment
+
+**Status:** Accepted — confirmed by the athlete, 2026-08-08
+([Q01](docs/questions/Q01-spreadsheet-formula-deviations.md))
+
+**Context.** The source workbook writes every adjustment on top of a percentage
+as a literal number: `+2.5` here, `-5` there. Some of those literals appear
+inside both branches of the kilogram/pound conditional, which makes them right
+in one unit system and wrong in the other. Week 4's bench subtracts a literal
+`5` in the kilogram branch — two increments, a 12.5% drop on a 40kg bench.
+
+The question was whether to reproduce the workbook faithfully (preserving
+continuity with training already logged against it) or implement the evident
+intent.
+
+**Decision.** Every literal nudge in the workbook means **one increment** in the
+athlete's own units — 2.5kg or 5lb. The engine expresses nudges as a *count of
+increments* rather than a weight, so the intent is unit-independent by
+construction and the class of bug cannot recur.
+
+A second workbook defect is covered by the same reading: Week 1 Day 4 tests
+`Inputs!B36`, an empty cell, instead of the units flag at `B11`. It reads the
+flag, like every other formula does.
+
+**Consequences.** The engine and the workbook disagree on exactly two cells,
+and the golden tests mark both `DEVIATION` with the reasoning inline — the
+markers stay so a future reader diffing against the workbook is not confused by
+the mismatch.
+
+> **Lens.** A literal `+2.5` or `-5` in the workbook is *one increment*, never a
+> weight. Any further formula ported from the workbook applies that reading
+> without re-asking. A conditional in the workbook that references an empty cell
+> is a copy/paste slip — find the cell it meant.

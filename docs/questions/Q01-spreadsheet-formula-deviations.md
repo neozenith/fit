@@ -1,9 +1,26 @@
 # Q01 — Two spreadsheet formulas look like units bugs. Fix or preserve?
 
-**Status:** Assumption taken, non-blocking. Reversible in one line each.
+**Status:** ✅ **ANSWERED 2026-08-08 — fix both. The assumptions taken were correct.**
 **Raised:** 2026-08-08, during the engine port.
 **Lens checked:** ADR-0001 (program is a pure function), ADR-0020 (queue, don't block).
-Neither Lens rules on *fidelity to a defective source*, so this is a genuine open question.
+Neither Lens rules on *fidelity to a defective source*, so this was a genuine open question.
+
+## Answer
+
+> "It is a copy-paste error, it should have been *one increment*."
+
+Both deviations stand as implemented. The engine is correct as written and the
+`DEVIATION` markers in `packages/program/test/golden.test.ts` now record a
+*confirmed correction* rather than a pending assumption — they stay in place so
+a future reader comparing against the workbook is not confused by the mismatch.
+
+**Rule this establishes:** where the workbook writes a literal `+2.5` / `-5`,
+the intent is always *one increment* in the athlete's own units. Any further
+formula ported from the workbook applies the same reading without re-asking.
+Recorded as the Lens on ADR-0021.
+
+The rest of this file is the original analysis, kept because it is the evidence
+behind the correction.
 
 ## The question
 

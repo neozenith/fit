@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  ACCOUNT-LEVEL baseline, deployed ONCE per account (stack:
+  github-oidc-baseline) and shared by every application bootstrapped into it.
+  It exists as its own stack because IAM permits only ONE OIDC provider per
+  issuer URL — so the GitHub provider cannot live inside any per-app stack
+  without the second app failing to create. Per-app stacks import its ARN via
+  the export below.
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    # Retained so deleting this stack cannot break every app that trusts it.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      # AWS pins GitHub's issuer through its own trust store; the thumbprint
+      # list is still required by the API but is no longer load-bearing, which
+      # is why a rotated GitHub certificate no longer breaks OIDC.
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+Outputs:
+  OidcProviderArn:
+    Description: Imported by each application's bootstrap stack.
+    Value: !Ref GitHubOidcProvider
+    Export:
+      Name: github-oidc-provider-arn

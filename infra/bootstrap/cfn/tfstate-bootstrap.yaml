@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  PER-APP bootstrap: the layer Terraform cannot self-host (ADR-0004). One stack
+  per application repository (stack name <app>-bootstrap), creating the
+  Terraform state bucket and the deployer role its GitHub repository assumes via
+  OIDC. Requires github-oidc-baseline to exist in this account first. Deployed
+  and converged by infra/bootstrap/bootstrap_cfn.sh; review with DRYRUN=1.
+
+Parameters:
+  AppName:
+    Type: String
+    AllowedPattern: "[a-z][a-z0-9-]{1,60}"
+    Description: >-
+      Application slug (e.g. fit). Prefixes the state bucket and the deployer
+      role, and matches the naming every Terraform stack uses.
+  GitHubOrg:
+    Type: String
+    AllowedPattern: "[A-Za-z0-9_.-]+"
+    Description: GitHub org/owner login, case-sensitive.
+  RepositoryName:
+    Type: String
+    AllowedPattern: "[A-Za-z0-9_.-]+"
+    Description: GitHub repository name, case-sensitive. Only this repo may assume the role.
+
+Resources:
+  # --- Terraform state: one bucket per app, key per stack per environment
+  # (ADR-0005). DeletionPolicy Retain is the interlock behind ADR-0004: state
+  # survives any `terraform destroy` AND any deletion of this bootstrap stack.
+  # Locking is S3-native (use_lockfile) — there is no DynamoDB lock table.
+  TfStateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${AppName}-tfstate-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          # State files are small but versioned forever; ninety days of history
+          # is far more than any rollback needs and keeps the bill at cents.
+          - Id: expire-noncurrent-state
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Project
+          Value: !Ref AppName
+        - Key: ManagedBy
+          Value: bootstrap
+
+  TfStateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TfStateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt TfStateBucket.Arn
+              - !Sub "${TfStateBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  # Deployer role. AdministratorAccess is deliberate at this scale: it
+  # provisions IAM, CloudFront, Lambda@Edge and DynamoDB, and enumerating that
+  # surface would produce a policy that is both enormous and perpetually one
+  # service behind. The blast radius is bounded by the repo-scoped OIDC trust
+  # below, and WHEN it may run per environment is bounded by the GitHub
+  # Environment promotion gates (ADR-0007).
+  GitHubDeployerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-github-deployer"
+      Description: !Sub "GitHub Actions (${GitHubOrg}/${RepositoryName}) assumes this via OIDC to apply ${AppName}'s Terraform."
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !ImportValue github-oidc-provider-arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              # Two subject patterns, OR-matched by IAM. The first is GitHub's
+              # standard `repo:org/name:...` subject. The second absorbs the
+              # immutable-id form (`repo:org@<ownerId>/name@<repoId>:...`) that
+              # GitHub now emits for some orgs — the `@*` wildcards match those
+              # ids without hardcoding them. AWS exposes only `sub` and `aud`
+              # for GitHub OIDC, so `sub` is the only lever for repo scoping.
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubOrg}/${RepositoryName}:*"
+                  - !Sub "repo:${GitHubOrg}@*/${RepositoryName}@*:*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Tags:
+        - Key: Project
+          Value: !Ref AppName
+        - Key: ManagedBy
+          Value: bootstrap
+
+Outputs:
+  TfStateBucketName:
+    Description: Backend bucket for every stack, key {stack}/{env}.tfstate.
+    Value: !Ref TfStateBucket
+  DeployerRoleArn:
+    Description: Set as AWS_ROLE_ARN in the repository's dev/test/prod Environments.
+    Value: !GetAtt GitHubDeployerRole.Arn

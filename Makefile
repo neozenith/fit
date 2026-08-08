@@ -150,9 +150,24 @@ token: ## Mint a short-lived session cookie for ENV=<local|dev|test|prod>
 # End-to-end — sibling of ci, never a dependency
 # ---------------------------------------------------------------------------
 
+.PHONY: smoke
+smoke: ## Check every API route of ENV answers, and that anonymous callers do not
+	bun run tools/smoke.ts --env $(ENV)
+
 .PHONY: e2e
 e2e: ## Playwright against ENV (default local)
 	bun run --cwd e2e test -- --project=$(ENV)
+
+.PHONY: shots
+shots: ## Screenshot every page of ENV, light and dark, into tmp/screenshots/
+	bun run e2e/screenshots.ts --env $(ENV)
+
+.PHONY: cold-start
+cold-start: ## Stand up a whole environment in dependency order (ADR-0022)
+	# workflow_dispatch resolves only against the DEFAULT branch, so this
+	# answers 404 until cold-start.yml has been merged to main.
+	gh workflow run cold-start.yml -f environment=$(ENV)
+	@echo "Dispatched. Watch it with: gh run watch"
 
 .PHONY: e2e-install
 e2e-install: ## Install Playwright browsers

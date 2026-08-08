@@ -22,10 +22,22 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Cache the bun install store
+        # setup-bun has no built-in `cache:` parameter, unlike setup-node, so
+        # this is wired explicitly. Keyed on the LOCKFILE, never package.json:
+        # a manifest can change without changing a single installed byte, and
+        # can stay identical while a transitive dependency drifts.
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Install
         # `--frozen-lockfile` so a dependency cannot drift between a developer's
@@ -58,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: ci
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -79,7 +91,19 @@ jobs:
       - name: Seed
         run: bun run tools/seed.ts
 
+      - name: Cache the Playwright browser
+        id: pw-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
       - name: Install Playwright browser
+        # Skipped entirely on an exact cache hit — the binary is ~130MB and the
+        # download dominates this job.
+        if: steps.pw-cache.outputs.cache-hit != 'true'
         # Through the e2e workspace, not `bun x` from the root: playwright is a
         # dependency of e2e alone, so a root invocation resolves a DIFFERENT
         # playwright than the one the tests import — it downloads a browser the
@@ -96,7 +120,7 @@ jobs:
           bun run tools/smoke.ts --env local
           bun run --cwd e2e test -- --project=local
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report

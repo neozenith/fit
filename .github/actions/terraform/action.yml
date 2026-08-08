@@ -29,7 +29,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: hashicorp/setup-terraform@v3
+    - uses: hashicorp/setup-terraform@v4
       with:
         terraform_version: "1.14.5"
         terraform_wrapper: false
@@ -49,7 +49,7 @@ runs:
         test -s api/dist/index.mjs || { echo "::error::API bundle is empty"; exit 1; }
 
     - name: Assume the deployer role
-      uses: aws-actions/configure-aws-credentials@v5
+      uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: ${{ inputs.aws_role_arn }}
         aws-region: ${{ inputs.aws_region }}

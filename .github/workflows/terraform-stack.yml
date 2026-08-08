@@ -49,12 +49,20 @@ permissions:
   id-token: write # required for OIDC federation to AWS
   pull-requests: write
 
-concurrency:
-  # Keyed on stack AND ref: two stacks deploy in parallel because they hold
-  # different state keys (ADR-0005), and two branches of the same stack do not
-  # queue behind each other for a plan.
-  group: tf-${{ inputs.stack }}-${{ github.ref }}
-  cancel-in-progress: false
+# NO workflow-level concurrency. Plans are read-only and must never queue behind
+# each other. Serialisation belongs on the APPLY jobs, and it must be keyed on
+# the thing that is actually contended: the Terraform STATE KEY.
+#
+# Keying on `${{ github.ref }}` was wrong, and wrong in a way that only appears
+# under load: the cold-start workflow and a merge-triggered apply are different
+# refs and different workflows, so they shared no group — and both applied the
+# same `{stack}/{env}.tfstate` at once. One of them then failed with "Saved plan
+# is stale", which is the atomic plan-then-apply guarantee doing its job, but
+# only after both had already contended for the S3 lock.
+#
+# The rule: any job that applies `{stack}/{env}` uses the group
+# `tfstate-{stack}-{env}`, whichever workflow it lives in. cold-start.yml uses
+# the same scheme deliberately.
 
 env:
   TERRAFORM_VERSION: "1.14.5"
@@ -148,6 +156,10 @@ jobs:
 
   apply-dev:
     name: apply / dev
+    concurrency:
+      # The state key, not the ref — see the note above the plan jobs.
+      group: tfstate-${{ inputs.stack }}-dev
+      cancel-in-progress: false
     needs: [ci, plan-dev]
     # A DRAFT pull request never reaches here — marking it ready for review is
     # the act that first mutates cloud state, and it mutates dev only.
@@ -167,6 +179,10 @@ jobs:
 
   apply-test:
     name: apply / test
+    concurrency:
+      # The state key, not the ref — see the note above the plan jobs.
+      group: tfstate-${{ inputs.stack }}-test
+      cancel-in-progress: false
     needs: [ci, plan-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -184,6 +200,10 @@ jobs:
 
   apply-prod:
     name: apply / prod
+    concurrency:
+      # The state key, not the ref — see the note above the plan jobs.
+      group: tfstate-${{ inputs.stack }}-prod
+      cancel-in-progress: false
     needs: [ci, plan-prod]
     # The prod GitHub Environment restricts deployments to v* tags on top of
     # this condition, so the gate is enforced twice — once here where it is

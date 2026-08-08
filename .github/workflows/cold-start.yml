@@ -49,16 +49,19 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: cold-start-${{ inputs.environment }}
-  cancel-in-progress: false
+# No workflow-level group. Each job serialises on the STATE KEY it mutates,
+# using the SAME scheme as terraform-stack.yml so a cold start and a
+# merge-triggered apply of the same stack cannot run at once.
 
 jobs:
   # One job per stack, chained with `needs`, rather than a loop inside one job.
   # The chain IS the dependency graph, so a reader sees the order in the run
   # summary and a failure stops everything downstream of it automatically.
   identity:
-    name: 1. identity
+    name: $1. identity
+    concurrency:
+      group: tfstate-identity-${{ inputs.environment }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
@@ -72,7 +75,10 @@ jobs:
           aws_region: ${{ vars.AWS_REGION }}
 
   data:
-    name: 2. data
+    name: $1. data
+    concurrency:
+      group: tfstate-data-${{ inputs.environment }}
+      cancel-in-progress: false
     needs: identity
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
@@ -87,7 +93,10 @@ jobs:
           aws_region: ${{ vars.AWS_REGION }}
 
   api:
-    name: 3. api
+    name: $1. api
+    concurrency:
+      group: tfstate-api-${{ inputs.environment }}
+      cancel-in-progress: false
     # Reads the table names `data` published.
     needs: data
     runs-on: ubuntu-latest
@@ -104,7 +113,10 @@ jobs:
           build_app: "true"
 
   edge:
-    name: 4. edge
+    name: $1. edge
+    concurrency:
+      group: tfstate-edge-${{ inputs.environment }}
+      cancel-in-progress: false
     # Reads the Function URL `api` published. This is the slow one — a new
     # distribution plus certificate validation takes fifteen minutes or more.
     needs: api
@@ -121,7 +133,10 @@ jobs:
           aws_region: ${{ vars.AWS_REGION }}
 
   archive:
-    name: 5. archive
+    name: $1. archive
+    concurrency:
+      group: tfstate-archive-${{ inputs.environment }}
+      cancel-in-progress: false
     # Reads the archive bucket `data` published. Independent of edge, but
     # sequenced after it so the whole run is one readable chain.
     needs: edge

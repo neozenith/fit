@@ -32,6 +32,7 @@ Status values: `Accepted`, `Superseded by ADR-NNNN`, `Proposed`.
 | [0020](#adr-0020--questions-are-queued-never-blocking) | Questions are queued, never blocking | Accepted |
 | [0021](#adr-0021--a-literal-weight-nudge-in-the-source-workbook-means-one-increment) | A literal weight nudge in the source workbook means one increment | Accepted |
 | [0022](#adr-0022--a-cold-environment-is-stood-up-by-one-ordered-ci-run-not-by-relaxing-the-stacks) | A cold environment is stood up by one ordered CI run | Accepted |
+| [0023](#adr-0023--ci-concurrency-is-keyed-on-the-terraform-state-key-not-the-git-ref) | CI concurrency is keyed on the Terraform state key | Accepted |
 
 ---
 
@@ -637,3 +638,41 @@ on a real resource — and until the first apply there are none.
 > **Lens.** Cold-start ordering is a *workflow* concern, never a *stack*
 > concern. If a stack needs to know whether its upstream exists, the ordering
 > has leaked into the wrong layer.
+
+---
+
+## ADR-0023 — CI concurrency is keyed on the Terraform state key, not the Git ref
+
+**Status:** Accepted — forced by a real collision, 2026-08-08
+
+**Context.** The first version keyed the reusable workflow's concurrency group
+on `tf-{stack}-{github.ref}`. That reads sensibly and is wrong, in a way that
+appears only under load.
+
+A merge to `main` triggers `apply / test`. The cold-start workflow, dispatched
+separately, also applies `identity` for `test`. Different workflows, different
+refs — so no shared group — and both applied `identity/test.tfstate` at the same
+moment. One failed with `Saved plan is stale`.
+
+That failure is the atomic plan-then-apply guarantee (ADR-A1) working exactly as
+designed: the applied plan must be the reviewed plan, and it refused a plan the
+world had moved out from under. But it fired *after* both jobs had already
+contended for the S3 lock, which is late and confusing.
+
+**Decision.** Concurrency is keyed on the thing that is actually contended: the
+**state key**. Any job that applies `{stack}/{env}` uses the group
+`tfstate-{stack}-{env}`, in whichever workflow it lives.
+
+The workflow-level group is removed entirely. Plans are read-only and must never
+queue behind each other — serialising them only made the pipeline slow without
+making it safer.
+
+**Consequences.** Two workflows that touch the same state now serialise before
+they authenticate, rather than racing and losing at the plan-staleness check.
+Plans of different environments run fully in parallel. A new workflow that
+applies Terraform must adopt the same group name — it is the shared vocabulary,
+not a per-workflow choice.
+
+> **Lens.** Key a concurrency group on the *resource being mutated*, never on
+> the *event that triggered the mutation*. If two triggers can reach the same
+> state, keying on the trigger guarantees they will eventually collide.

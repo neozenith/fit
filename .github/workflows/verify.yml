@@ -76,9 +76,6 @@ jobs:
           echo "::error::$TARGET_ENV did not answer /api/health within 10 minutes"
           exit 1
 
-      - name: Smoke — every API route
-        run: bun run tools/smoke.ts --env "$TARGET_ENV"
-
       - name: Cache the Playwright browser
         id: pw-cache
         uses: actions/cache@v5
@@ -89,8 +86,15 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Playwright browser
+        # BEFORE the smoke step, not after. The screenshot step below runs with
+        # `if: always()` precisely so a broken environment still gets captured —
+        # and if the browser install sits after a step that can fail, the
+        # screenshot has no browser exactly when it is most wanted.
         if: steps.pw-cache.outputs.cache-hit != 'true'
         run: bun run --cwd e2e install-browser
+
+      - name: Smoke — every API route
+        run: bun run tools/smoke.ts --env "$TARGET_ENV"
 
       - name: Browser suite
         run: bun run --cwd e2e test -- --project="$TARGET_ENV"

@@ -1,0 +1,35 @@
+# Local backing services.
+#
+# Only DynamoDB is here, and that is the whole point of ADR-0003: with no VPC,
+# no ALB, no container runtime and no relational database in the deployed
+# architecture, there is nothing else to emulate. The API and the SPA run
+# directly on Bun.
+
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:2.5.2
+    container_name: fit-dynamodb
+    ports:
+      - "8000:8000"
+    # Two flags, both load-bearing:
+    #
+    # `-sharedDb` puts every client on ONE database regardless of the
+    # credentials it presents. Without it the seed script and the API each get
+    # their own isolated database keyed by access-key, and the app starts up
+    # against empty tables the seed script swears it just filled.
+    #
+    # `-inMemory` avoids a mounted volume entirely. A `-dbPath` onto a Docker
+    # volume fails at runtime — the image runs as `dynamodblocal` while the
+    # volume is created root-owned, so SQLite cannot open its file and the
+    # container sits in a "stopped abnormally, reincarnating" loop while still
+    # answering the health check. Local data is disposable by design: `make
+    # seed` rebuilds it in under a second, and losing it on `make down` is a
+    # feature rather than a cost.
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    healthcheck:
+      # DynamoDB Local answers 400 to an unsigned request, which is proof the
+      # port is live. Waiting for a 200 would wait forever.
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8000 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

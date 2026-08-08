@@ -1,0 +1,16 @@
+{
+  "name": "@fit/e2e",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-ssm": "3.907.0",
+    "@playwright/test": "1.57.0",
+    "@types/node": "^26.2.0"
+  }
+}

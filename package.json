@@ -4,7 +4,10 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "api"
+    "api",
+    "frontend",
+    "tools",
+    "e2e"
   ],
   "devDependencies": {
     "@biomejs/biome": "2.3.14",

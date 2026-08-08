@@ -90,6 +90,21 @@ tf-check: ## fmt-check + validate every stack. No cloud, no state.
 	  terraform -chdir="$$dir" validate -no-color; \
 	done
 
+.PHONY: diagrams
+diagrams: ## Check every Mermaid diagram for WCAG contrast and complexity
+	# NOT part of `ci`, and that is a limitation rather than a choice: the
+	# scripts live in `.claude/skills/`, which is not tracked in this
+	# repository, so a CI runner has no copy of them. Run this locally before
+	# changing any diagram — both gates must exit 0.
+	@if [ -d .claude/skills/mermaidjs_diagrams/scripts ]; then \
+	  bun run .claude/skills/mermaidjs_diagrams/scripts/mermaid_contrast.ts \
+	    README.md ARCHITECTURE.md .github/actions/terraform/README.md; \
+	  bun run .claude/skills/mermaidjs_diagrams/scripts/mermaid_complexity.ts \
+	    README.md ARCHITECTURE.md .github/actions/terraform/README.md; \
+	else \
+	  echo "mermaidjs_diagrams skill not present — diagrams unchecked"; \
+	fi
+
 .PHONY: tf-docs
 tf-docs: ## Regenerate the module input/output tables
 	bun run tools/tf-docs.ts

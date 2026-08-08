@@ -10,8 +10,24 @@
 # id is derived from the caller's credentials at runtime.
 
 # AWS profile for the target account. Leave EMPTY to use ambient credentials
-# (an active SSO session, or an assumed role in CI).
-APP_PROFILE="${AWS_PROFILE:-fullsend-jpai}"
+# (an active SSO session, or a role assumed via OIDC in CI).
+#
+# Two subtleties, both of which caused a real failure:
+#
+#   1. `${VAR-default}` rather than `${VAR:-default}`. The colon form treats an
+#      explicitly-EMPTY value as unset and substitutes the default anyway — so a
+#      workflow setting `AWS_PROFILE: ""` to mean "use ambient credentials" got
+#      `fullsend-jpai` instead, and every AWS call failed with "config profile
+#      could not be found".
+#
+#   2. Under CI there is never a profile, whatever anything says. A runner has
+#      OIDC-assumed credentials in the environment and no `~/.aws/config` at
+#      all, so naming a profile can only break it.
+if [ -n "${GITHUB_ACTIONS:-}${CI:-}" ]; then
+  APP_PROFILE=""
+else
+  APP_PROFILE="${AWS_PROFILE-fullsend-jpai}"
+fi
 
 # Region for regional resources (ADR-0017). The certificate, the edge function
 # and the Cost and Usage Report live in us-east-1 regardless — AWS gives no

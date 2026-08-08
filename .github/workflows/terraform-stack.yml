@@ -15,10 +15,11 @@ name: TF Stack
 #      plan and apply job `needs: ci`, so a formatting or validation failure
 #      stops the run before any AWS authentication happens.
 #
-#   2. `plan` runs for ALL THREE environments on every trigger, so a draft PR is
-#      a genuine zero-risk "what would this do everywhere" report. Every apply
-#      `needs: [ci, plan]`, so nothing mutates state until the whole matrix is
-#      green.
+#   2. All THREE environments plan on every trigger, so a draft PR is a genuine
+#      zero-risk "what would this do everywhere" report. Each apply needs its
+#      OWN plan — `apply / dev` waits on `plan / dev` and nothing else — so an
+#      environment that has not been stood up yet cannot block a deploy to one
+#      that has. See the note above the plan jobs.
 #
 #   3. `plan` deliberately binds NO GitHub Environment. prod is gated to v* tags,
 #      so a `plan / prod` job on a PR branch would be rejected by that very gate.
@@ -87,19 +88,58 @@ jobs:
           terraform -chdir=infra/stacks/${{ inputs.stack }} init -backend=false -input=false
           terraform -chdir=infra/stacks/${{ inputs.stack }} validate
 
-  plan:
-    name: plan / ${{ matrix.env }}
+  # THREE SEPARATE PLAN JOBS, not a matrix — and the verbosity buys something
+  # specific.
+  #
+  # `needs:` cannot reference one cell of a matrix, only the whole job. So with
+  # a matrix, `apply / dev` waits on all three cells and is SKIPPED if any of
+  # them fails. That is wrong in the case that actually happens: an environment
+  # that has not been stood up yet fails its plan for reasons having nothing to
+  # do with the change, and takes a perfectly good dev deploy down with it.
+  #
+  # Split, each apply depends on exactly its own plan. A red `plan / prod` on an
+  # empty prod no longer blocks dev, and the blast-radius report ADR-0007 wants
+  # is unchanged — all three still plan on every trigger.
+
+  plan-dev:
+    name: plan / dev
     needs: ci
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        env: [dev, test, prod]
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/terraform
         with:
-          env: ${{ matrix.env }}
+          env: dev
+          stack: ${{ inputs.stack }}
+          action: plan
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: ${{ inputs.needs_app_bundle }}
+
+  plan-test:
+    name: plan / test
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/terraform
+        with:
+          env: test
+          stack: ${{ inputs.stack }}
+          action: plan
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: ${{ inputs.needs_app_bundle }}
+
+  plan-prod:
+    name: plan / prod
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/terraform
+        with:
+          env: prod
           stack: ${{ inputs.stack }}
           action: plan
           aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
@@ -108,7 +148,7 @@ jobs:
 
   apply-dev:
     name: apply / dev
-    needs: [ci, plan]
+    needs: [ci, plan-dev]
     # A DRAFT pull request never reaches here — marking it ready for review is
     # the act that first mutates cloud state, and it mutates dev only.
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
@@ -127,7 +167,7 @@ jobs:
 
   apply-test:
     name: apply / test
-    needs: [ci, plan]
+    needs: [ci, plan-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: test
@@ -144,7 +184,7 @@ jobs:
 
   apply-prod:
     name: apply / prod
-    needs: [ci, plan]
+    needs: [ci, plan-prod]
     # The prod GitHub Environment restricts deployments to v* tags on top of
     # this condition, so the gate is enforced twice — once here where it is
     # readable, once there where it cannot be edited in a pull request.

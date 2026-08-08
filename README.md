@@ -117,6 +117,15 @@ propagate) never blocks an API deploy (seconds):
 
 ## Sign-in
 
+Sign in with a Microsoft account in the `jpeakai.onmicrosoft.com` tenant, on any
+of the three hostnames. The app registration is `fit`
+(`9f4078bd-0dac-4bb1-9e56-303979d33eb1`), single-tenant, with a redirect URI
+registered for every environment and for `localhost:5173`.
+
+Admission needs BOTH checks to pass: the token's `tid` must match the tenant,
+AND the address must appear in that environment's `allowed_users` parameter. The
+tenant check alone would admit every account in the directory.
+
 OAuth terminates at a **Lambda@Edge viewer-request function**, never in the
 application. It strips every inbound `x-auth-*` header before doing anything
 else, rejects a non-canonical `Host` with 421, handles `/oauth2/*` entirely at

@@ -33,6 +33,7 @@ Status values: `Accepted`, `Superseded by ADR-NNNN`, `Proposed`.
 | [0021](#adr-0021--a-literal-weight-nudge-in-the-source-workbook-means-one-increment) | A literal weight nudge in the source workbook means one increment | Accepted |
 | [0022](#adr-0022--a-cold-environment-is-stood-up-by-one-ordered-ci-run-not-by-relaxing-the-stacks) | A cold environment is stood up by one ordered CI run | Accepted |
 | [0023](#adr-0023--ci-concurrency-is-keyed-on-the-terraform-state-key-not-the-git-ref) | CI concurrency is keyed on the Terraform state key | Accepted |
+| [0024](#adr-0024--the-spa-fallback-lives-in-the-edge-function-not-in-custom_error_response) | The SPA fallback lives in the edge function | Accepted |
 
 ---
 
@@ -676,3 +677,46 @@ not a per-workflow choice.
 > **Lens.** Key a concurrency group on the *resource being mutated*, never on
 > the *event that triggered the mutation*. If two triggers can reach the same
 > state, keying on the trigger guarantees they will eventually collide.
+
+---
+
+## ADR-0024 — The SPA fallback lives in the edge function, not in `custom_error_response`
+
+**Status:** Accepted — forced by a real failure, 2026-08-08
+
+**Context.** A single-page application needs deep links to serve `index.html`
+rather than 404. The obvious CloudFront mechanism is `custom_error_response`,
+mapping 403 and 404 to `/index.html` with status 200.
+
+It is a trap, and the reason is a detail of the CloudFront model:
+`custom_error_response` is a property of the **distribution**, not of a cache
+behaviour. CloudFront offers no per-behaviour form. So a rule intended for the
+S3 origin also catches responses from the API origin.
+
+The consequence was found by a tool, not by reading: `POST /api/blocks` returned
+**HTTP 200 with an HTML body**. The origin had refused the request with 403, and
+the distribution had rewritten it into the application's own index page. A
+refused write looked like a successful one; the only symptom was a JSON parse
+error in the client, several layers away from the cause.
+
+That is precisely the laundering ADR-0009 forbids for the 421 host check — and
+it had been reintroduced through a different door, while the documentation
+asserted (wrongly) that the rule was "scoped to the S3 origin only".
+
+**Decision.** No `custom_error_response` on the distribution at all. The edge
+authenticator rewrites `request.uri` to `/index.html` at viewer-request, and
+only for a path that is actually a SPA route: no file extension, and not under
+`/api/`.
+
+**Consequences.** Every origin error keeps its own status and body, so a 403 is
+a 403 and a 502 is a 502. The fallback is scoped by an explicit predicate that
+is unit-tested, rather than by a status code that several origins share.
+
+An asset request is deliberately *not* rewritten: serving `index.html` for a
+missing `.js` produces a syntax error in the console instead of a 404, which is
+among the most time-consuming ways for a missing file to present.
+
+> **Lens.** Before using a platform feature to shape one origin's responses,
+> check its SCOPE. A distribution-wide rule applied to fix one behaviour will
+> silently reshape every other one — and the damage shows up furthest from the
+> configuration that caused it.

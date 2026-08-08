@@ -183,7 +183,7 @@ the dependency runs one way and the scope stays exactly one distribution.
 
 | Condition | Response | Why that response |
 |---|---|---|
-| `Host` not in the allow-list | **421** | A 403 would be laundered into the app by the SPA error rewrite. |
+| `Host` not in the allow-list | **421** | A 403 would be laundered into the app by the SPA fallback. |
 | Client secret unseeded | **500** naming the SSM parameter | A generic 403 is indistinguishable from a real denial. |
 | Nonce mismatch / no txn cookie | **403** before any token exchange | Blocks login-CSRF. |
 | Bad signature, issuer, audience or expiry | **403**, indistinguishable | No oracle for which check failed. |

@@ -6,6 +6,7 @@ import {
   errorPage,
   headerValue,
   isAllowedHost,
+  isSpaRoute,
   parseCookies,
   redirectUri,
   respond,
@@ -278,6 +279,21 @@ export const handler = async (event) => {
   // reached only on an admitted host and still cannot carry a forged identity.
   // Before the session check, because it must answer without one.
   if (PUBLIC_PATHS.has(uri)) return request;
+
+  // SPA deep links are rewritten HERE rather than by CloudFront's
+  // `custom_error_response`, and that is a correctness fix, not a preference.
+  //
+  // `custom_error_response` is a property of the DISTRIBUTION, not of a cache
+  // behaviour — CloudFront offers no per-behaviour form. So a rule mapping
+  // 403/404 to `/index.html` also catches a 403 from the API origin and turns
+  // it into an HTML page with status **200**. A POST that was actually refused
+  // then looks like a successful request returning a web page, which is both
+  // impossible to debug and exactly the laundering ADR-0009 forbids.
+  //
+  // Rewriting the URI at viewer-request is scoped precisely: only a path with
+  // no file extension and no `/api/` prefix becomes `index.html`, and every
+  // origin error keeps its own status.
+  if (isSpaRoute(uri)) request.uri = "/index.html";
 
   const session = verify(config.sessionKey, cookies[SESSION_COOKIE]);
   if (session?.email) return injectIdentity(request, config, session);

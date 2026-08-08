@@ -96,9 +96,32 @@ const main = async (): Promise<void> => {
         }
       : { cookie };
 
+  /**
+   * Read a JSON body, and say what actually arrived when it is not JSON.
+   *
+   * A bare `.json()` reports "Failed to parse JSON" and nothing else — not the
+   * status, not the URL, not the first bytes. Behind CloudFront that message is
+   * actively misleading: a 403 from the origin is rewritten to `index.html`
+   * with status **200**, so `response.ok` is true and the "JSON" is a web page.
+   */
+  const readJson = async <T>(response: Response, what: string): Promise<T> => {
+    const body = await response.text();
+    try {
+      return JSON.parse(body) as T;
+    } catch {
+      throw new Error(
+        `${what}: expected JSON, got HTTP ${response.status} ` +
+          `${response.headers.get("content-type") ?? "no content-type"} — ` +
+          `${body.slice(0, 200).replace(/\s+/g, " ")}`,
+      );
+    }
+  };
+
   const existing = await fetch(`${host}/api/blocks`, { headers: auth });
-  if (!existing.ok) throw new Error(`could not read blocks: HTTP ${existing.status}`);
-  const { blocks } = (await existing.json()) as { blocks: unknown[] };
+  if (!existing.ok) {
+    throw new Error(`could not read blocks: HTTP ${existing.status} ${await existing.text()}`);
+  }
+  const { blocks } = await readJson<{ blocks: unknown[] }>(existing, "reading blocks");
 
   if (blocks.length > 0 && !values.force) {
     console.log(
@@ -128,7 +151,7 @@ const main = async (): Promise<void> => {
     throw new Error(`create failed: HTTP ${response.status} ${await response.text()}`);
   }
 
-  const { block } = (await response.json()) as { block: { blockId: string } };
+  const { block } = await readJson<{ block: { blockId: string } }>(response, "creating the block");
   console.log(
     `Created block ${block.blockId} in ${env}, starting ${startDate} ` +
       `(squat ${values.squat} / bench ${values.bench} / deadlift ${values.deadlift} ${values.units}).`,

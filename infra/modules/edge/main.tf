@@ -344,21 +344,17 @@ resource "aws_cloudfront_distribution" "app" {
     }
   }
 
-  # SPA deep links. Scoped to 403/404 from the S3 origin only; the API behaviour
-  # has caching disabled so its own 404s are never rewritten into index.html.
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
+  # NO `custom_error_response`, deliberately.
+  #
+  # It is a property of the DISTRIBUTION, not of a cache behaviour — CloudFront
+  # offers no per-behaviour form. A rule mapping 403/404 to `/index.html` would
+  # therefore also catch a 403 from the API origin and return it as HTML with
+  # status 200: a refused request that looks like a successful one. That is the
+  # laundering ADR-0009 forbids, and it cost real debugging time before it was
+  # removed.
+  #
+  # SPA deep links are rewritten in the edge authenticator instead, where the
+  # rule can be scoped to paths that are actually SPA routes.
 
   restrictions {
     geo_restriction {

@@ -1,0 +1,96 @@
+name: Terraform
+description: >-
+  Authenticate to AWS via OIDC, initialise a stack against its per-environment
+  partial backend, and plan or apply it. Apply is atomic plan-then-apply so the
+  applied plan is the reviewed plan.
+
+inputs:
+  env:
+    description: dev | test | prod
+    required: true
+  stack:
+    description: Stack directory name under infra/stacks/
+    required: true
+  action:
+    description: plan | apply
+    required: true
+  aws_role_arn:
+    description: Deployer role to assume via OIDC
+    required: true
+  aws_region:
+    description: AWS region
+    required: false
+    default: ap-southeast-2
+  build_app:
+    description: Build the API bundle first (only the `api` stack needs it)
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.14.5"
+        terraform_wrapper: false
+
+    - name: Build the API bundle
+      # Conditional because only one stack needs it, and building for the other
+      # five would add a minute to every plan for nothing.
+      if: inputs.build_app == 'true'
+      shell: bash
+      run: |
+        curl -fsSL https://bun.sh/install | bash
+        export PATH="$HOME/.bun/bin:$PATH"
+        bun install --frozen-lockfile
+        bun run --cwd api build
+        # The plan hashes this directory. If it is empty the archive_file
+        # produces a different hash every run and every plan shows a change.
+        test -s api/dist/index.mjs || { echo "::error::API bundle is empty"; exit 1; }
+
+    - name: Assume the deployer role
+      uses: aws-actions/configure-aws-credentials@v5
+      with:
+        role-to-assume: ${{ inputs.aws_role_arn }}
+        aws-region: ${{ inputs.aws_region }}
+        # Names the run in CloudTrail, so a change is traceable to the workflow
+        # run that made it without correlating timestamps.
+        role-session-name: gha-${{ inputs.stack }}-${{ inputs.env }}-${{ github.run_id }}
+
+    - name: terraform init
+      shell: bash
+      run: |
+        terraform -chdir=infra/stacks/${{ inputs.stack }} init \
+          -backend-config=backends/${{ inputs.env }}.config \
+          -input=false -reconfigure
+
+    - name: terraform plan
+      shell: bash
+      run: |
+        terraform -chdir=infra/stacks/${{ inputs.stack }} plan \
+          -var environment=${{ inputs.env }} \
+          -input=false -lock-timeout=5m \
+          -out=tfplan -detailed-exitcode || code=$?
+        # `-detailed-exitcode` returns 2 for "changes present", which is a
+        # normal outcome and must not fail the job. Only 1 is an error.
+        if [ "${code:-0}" = "1" ]; then exit 1; fi
+
+    - name: Summarise the plan
+      shell: bash
+      run: |
+        {
+          echo "### \`${{ inputs.stack }}\` / \`${{ inputs.env }}\`"
+          echo
+          echo '```'
+          terraform -chdir=infra/stacks/${{ inputs.stack }} show -no-color tfplan | tail -c 60000
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: terraform apply
+      if: inputs.action == 'apply'
+      shell: bash
+      # Applies the SAVED plan, not a fresh one. Re-planning at apply time would
+      # apply something nobody looked at.
+      run: |
+        terraform -chdir=infra/stacks/${{ inputs.stack }} apply \
+          -input=false -lock-timeout=5m -auto-approve tfplan

@@ -1,0 +1,94 @@
+name: Deploy frontend
+
+# The SPA is static assets, not infrastructure, so it deploys on its own path
+# rather than through a Terraform stack. Same promotion rules as everything else
+# (ADR-0007): a ready-for-review PR publishes to dev, main to test, a v* tag to
+# prod.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - frontend/**
+      - packages/program/**
+      - .github/workflows/deploy-frontend.yml
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - frontend/**
+      - packages/program/**
+      - .github/workflows/deploy-frontend.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # Draft pull requests build in App CI but publish nothing.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    environment: >-
+      ${{ startsWith(github.ref, 'refs/tags/v') && 'prod'
+       || github.ref == 'refs/heads/main' && 'test'
+       || 'dev' }}
+    env:
+      TARGET_ENV: >-
+        ${{ startsWith(github.ref, 'refs/tags/v') && 'prod'
+         || github.ref == 'refs/heads/main' && 'test'
+         || 'dev' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd frontend build
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-frontend-${{ github.run_id }}
+
+      - name: Resolve the target from SSM
+        # Read from SSM rather than passed as a workflow input, so the bucket
+        # and distribution are whatever the edge stack most recently created.
+        # A hardcoded name here would silently publish into a stale bucket after
+        # any rename.
+        run: |
+          echo "BUCKET=$(aws ssm get-parameter --name /fit/$TARGET_ENV/edge/spa_bucket --query Parameter.Value --output text)" >> "$GITHUB_ENV"
+          echo "DISTRIBUTION=$(aws ssm get-parameter --name /fit/$TARGET_ENV/edge/distribution_id --query Parameter.Value --output text)" >> "$GITHUB_ENV"
+
+      - name: Publish
+        run: |
+          # Two passes, and the ORDER matters. Fingerprinted assets go up first
+          # with a long cache life; index.html goes up last with no cache at all.
+          # Reversed, a browser could fetch the new index.html and then ask for
+          # assets that have not landed yet — a blank page for the length of the
+          # upload.
+          aws s3 sync frontend/dist "s3://$BUCKET" \
+            --delete --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+
+          aws s3 cp frontend/dist/index.html "s3://$BUCKET/index.html" \
+            --cache-control "no-cache,no-store,must-revalidate"
+
+      - name: Invalidate the cache
+        # Only index.html can be stale — every other asset is content-hashed, so
+        # a wildcard invalidation would pay for nothing.
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION" \
+            --paths "/" "/index.html" \
+            --query 'Invalidation.Id' --output text
+
+      - name: Verify the deployment answers
+        run: |
+          bun run tools/smoke.ts --env "$TARGET_ENV"

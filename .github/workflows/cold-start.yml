@@ -58,7 +58,7 @@ jobs:
   # The chain IS the dependency graph, so a reader sees the order in the run
   # summary and a failure stops everything downstream of it automatically.
   identity:
-    name: $1. identity
+    name: 1. identity
     concurrency:
       group: tfstate-identity-${{ inputs.environment }}
       cancel-in-progress: false
@@ -75,7 +75,7 @@ jobs:
           aws_region: ${{ vars.AWS_REGION }}
 
   data:
-    name: $1. data
+    name: 2. data
     concurrency:
       group: tfstate-data-${{ inputs.environment }}
       cancel-in-progress: false
@@ -93,7 +93,7 @@ jobs:
           aws_region: ${{ vars.AWS_REGION }}
 
   api:
-    name: $1. api
+    name: 3. api
     concurrency:
       group: tfstate-api-${{ inputs.environment }}
       cancel-in-progress: false
@@ -113,7 +113,7 @@ jobs:
           build_app: "true"
 
   edge:
-    name: $1. edge
+    name: 4. edge
     concurrency:
       group: tfstate-edge-${{ inputs.environment }}
       cancel-in-progress: false
@@ -133,7 +133,7 @@ jobs:
           aws_region: ${{ vars.AWS_REGION }}
 
   archive:
-    name: $1. archive
+    name: 5. archive
     concurrency:
       group: tfstate-archive-${{ inputs.environment }}
       cancel-in-progress: false

@@ -194,10 +194,17 @@ shots: ## Screenshot every page of ENV, light and dark, into tmp/screenshots/
 
 .PHONY: cold-start
 cold-start: ## Stand up a whole environment in dependency order (ADR-0022)
-	# workflow_dispatch resolves only against the DEFAULT branch, so this
-	# answers 404 until cold-start.yml has been merged to main.
-	gh workflow run cold-start.yml -f environment=$(ENV)
-	@echo "Dispatched. Watch it with: gh run watch"
+	# Two constraints, both learned the hard way:
+	#   1. workflow_dispatch resolves only against the DEFAULT branch, so this
+	#      answers 404 until cold-start.yml has been merged to main.
+	#   2. prod is gated to v* TAGS, so a prod dispatch must name a tag ref or
+	#      the job is refused before it starts — no steps, no logs.
+	 [ "20 20 12 61 79 80 81 98 701 33 100 204 250 395 398 399 400ENV)" = "prod" ] && [ -z "20 20 12 61 79 80 81 98 701 33 100 204 250 395 398 399 400REF)" ]; then \
+	  echo "ERROR: prod must be dispatched from a tag. Try: make cold-start ENV=prod REF=v0.1.0"; \
+	  exit 1; \
+	fi
+	gh workflow run cold-start.yml 20 20 12 61 79 80 81 98 701 33 100 204 250 395 398 399 400if 20 20 12 61 79 80 81 98 701 33 100 204 250 395 398 399 400REF),--ref 20 20 12 61 79 80 81 98 701 33 100 204 250 395 398 399 400REF),) -f environment=20 20 12 61 79 80 81 98 701 33 100 204 250 395 398 399 400ENV)
+	 "Dispatched. Watch it with: gh run watch"
 
 .PHONY: e2e-install
 e2e-install: ## Install Playwright browsers

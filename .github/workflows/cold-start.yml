@@ -35,6 +35,19 @@ name: Cold start
 # their apply — the same empty-account condition this workflow exists to fix,
 # arriving one commit before the fix is dispatchable. That is expected, and it
 # is self-correcting: dispatch this immediately after the merge.
+#
+# SECOND GOTCHA, for prod only: every job here binds `environment:`, and the
+# prod GitHub Environment permits deployments from `v*` TAGS alone (ADR-0007).
+# Dispatching this for prod from `main` is refused before the job starts — no
+# steps run, no logs, just a failed job, which is a confusing way to learn it.
+#
+# So prod is stood up from a TAG:
+#
+#     git tag -a v0.1.0 -m "..." && git push origin v0.1.0
+#     gh workflow run cold-start.yml --ref v0.1.0 -f environment=prod
+#
+# That is the gate working, not fighting it: a change reaches prod because
+# someone tagged a release, including the change that creates prod.
 
 on:
   workflow_dispatch:

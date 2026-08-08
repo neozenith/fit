@@ -321,9 +321,16 @@ resource "aws_cloudfront_distribution" "app" {
     compress                 = true
 
     lambda_function_association {
-      event_type   = "viewer-request"
-      lambda_arn   = aws_lambda_function.auth.qualified_arn
-      include_body = false
+      event_type = "viewer-request"
+      lambda_arn = aws_lambda_function.auth.qualified_arn
+      # TRUE here, and ONLY here. CloudFront's OAC signs a Lambda origin request
+      # as though the payload were empty, so Lambda rejects every POST with 403
+      # until the edge supplies `x-amz-content-sha256` — and the function cannot
+      # compute that hash without seeing the body.
+      #
+      # The other two behaviours keep it false: bodies are meaningless on an
+      # asset request, and forwarding them would cost latency on every one.
+      include_body = true
     }
   }
 

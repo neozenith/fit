@@ -77,3 +77,12 @@ export const nonce = (bytes = 32) => b64url(randomBytes(bytes));
 
 /** PKCE S256 challenge for a verifier. */
 export const pkceChallenge = (verifier) => b64url(createHash("sha256").update(verifier).digest());
+
+/**
+ * Hex SHA-256 of a buffer.
+ *
+ * Hex, not base64, and lower-case: that is the exact form SigV4's
+ * `x-amz-content-sha256` header requires, and a mismatch there fails the
+ * signature with no diagnostic beyond a 403.
+ */
+export const sha256Hex = (bytes) => createHash("sha256").update(bytes).digest("hex");

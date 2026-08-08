@@ -251,3 +251,34 @@ describe("the public path carve-out is exact, never a prefix", () => {
     expect(PUBLIC_PATHS.has(uri)).toBe(false);
   });
 });
+
+describe("the payload hash CloudFront's OAC does not compute", () => {
+  test("hashing is over BYTES, so encoding must be honoured", async () => {
+    const { sha256Hex } = await import("./crypto.mjs");
+    const text = "hello";
+    const asUtf8 = sha256Hex(Buffer.from(text, "utf8"));
+    const asBase64 = sha256Hex(Buffer.from(Buffer.from(text).toString("base64"), "base64"));
+
+    // Decoding base64 correctly must land on the same bytes as the utf8 form.
+    // Hashing the base64 STRING instead produces a different digest, and the
+    // resulting signature mismatch is indistinguishable from sending no header
+    // at all — a 403 with no diagnostic.
+    expect(asBase64).toBe(asUtf8);
+    expect(sha256Hex(Buffer.from(Buffer.from(text).toString("base64"), "utf8"))).not.toBe(asUtf8);
+  });
+
+  test("the digest is lower-case hex, which is what SigV4 requires", async () => {
+    const { sha256Hex } = await import("./crypto.mjs");
+    const digest = sha256Hex(Buffer.from("payload"));
+    expect(digest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("an empty body hashes to the value CloudFront already assumes", async () => {
+    const { sha256Hex } = await import("./crypto.mjs");
+    // This is why GET requests worked all along and only writes failed: with no
+    // body, the hash CloudFront signs and the hash Lambda computes agree.
+    expect(sha256Hex(Buffer.alloc(0))).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
+  });
+});

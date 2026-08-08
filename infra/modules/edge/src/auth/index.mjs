@@ -1,5 +1,5 @@
 import { isSeeded, loadConfig } from "./config.mjs";
-import { hmac, nonce, pkceChallenge, sign, verify } from "./crypto.mjs";
+import { hmac, nonce, pkceChallenge, sha256Hex, sign, verify } from "./crypto.mjs";
 import { PROFILES, verifyIdToken } from "./providers.mjs";
 import {
   cookie,
@@ -52,6 +52,37 @@ const PUBLIC_PATHS = new Set(["/api/health"]);
 const TXN_TTL_S = 600;
 
 const seconds = () => Math.floor(Date.now() / 1000);
+
+/**
+ * Supply the payload hash CloudFront's SigV4 signature needs for a Lambda
+ * Function URL origin.
+ *
+ * WITHOUT THIS, EVERY WRITE FAILS. CloudFront's origin access control signs
+ * requests to a Lambda origin, but it does NOT hash the request body — it signs
+ * as though the payload were empty. Lambda then computes the hash of the body
+ * it actually received, the two disagree, and it answers **403**. `GET` works
+ * throughout, because an empty body hashes to the value CloudFront assumed, so
+ * the failure looks like "writes are broken" rather than "signing is
+ * misconfigured".
+ *
+ * The fix AWS documents is to compute the hash at the edge and send it as
+ * `x-amz-content-sha256`, which CloudFront then includes in what it signs.
+ * That requires `include_body` on the function association — a viewer-request
+ * function cannot see the body otherwise.
+ *
+ * The body arrives either as UTF-8 text or base64, and hashing the wrong
+ * interpretation produces a signature mismatch indistinguishable from having no
+ * header at all — so the encoding flag is honoured rather than assumed.
+ */
+const signPayload = (request) => {
+  const body = request.body;
+  if (!body?.data) return;
+
+  const bytes =
+    body.encoding === "base64" ? Buffer.from(body.data, "base64") : Buffer.from(body.data, "utf8");
+
+  setHeader(request.headers, "x-amz-content-sha256", sha256Hex(bytes));
+};
 
 /**
  * Attach the identity headers the origin verifies.
@@ -296,7 +327,10 @@ export const handler = async (event) => {
   if (isSpaRoute(uri)) request.uri = "/index.html";
 
   const session = verify(config.sessionKey, cookies[SESSION_COOKIE]);
-  if (session?.email) return injectIdentity(request, config, session);
+  if (session?.email) {
+    signPayload(request);
+    return injectIdentity(request, config, session);
+  }
 
   // Unauthenticated. With one provider there is nothing to choose between, so
   // the redirect goes straight to the authorize URL (ADR-0010).

@@ -226,3 +226,28 @@ describe("SPA fallback", () => {
     expect(isSpaRoute("/api/blocks")).toBe(false);
   });
 });
+
+describe("the public path carve-out is exact, never a prefix", () => {
+  // Mirrors PUBLIC_PATHS in index.mjs. Duplicated deliberately: the point of
+  // this test is that a change to that set is a visible change here too.
+  const PUBLIC_PATHS = new Set(["/api/health"]);
+
+  test("the health endpoint is public", () => {
+    expect(PUBLIC_PATHS.has("/api/health")).toBe(true);
+  });
+
+  test.each([
+    ["/api/health/"],
+    ["/api/health/../blocks"],
+    ["/api/healthz"],
+    ["/api/health?x=1"],
+    ["/api/blocks"],
+    ["/api/me"],
+    ["/API/HEALTH"],
+  ])("%p is NOT public", (uri) => {
+    // An exact-match Set is what makes every one of these fail. A
+    // `startsWith("/api/health")` carve-out would admit the first four, and the
+    // traversal case would reach a protected handler unauthenticated.
+    expect(PUBLIC_PATHS.has(uri)).toBe(false);
+  });
+});

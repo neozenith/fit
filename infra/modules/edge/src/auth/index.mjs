@@ -32,6 +32,21 @@ const IDENTITY_COOKIE = "__identity";
 /** How long an injected identity header is valid at the origin. */
 const SIG_TTL_S = 300;
 
+/**
+ * The only paths that reach the origin without a session.
+ *
+ * An EXACT-match set, never a prefix. A prefix carve-out for `/api/health`
+ * would also admit `/api/health/../blocks`, and path traversal past an
+ * allow-list is precisely the bug this shape prevents.
+ *
+ * `/api/health` is public because it has to answer before the platform is
+ * fully wired — during a cold start, from a monitor, from a deploy pipeline
+ * verifying an environment came up. It exposes a boolean and an environment
+ * name, and nothing else. The origin ALSO exempts it, which is not redundant:
+ * the two layers are independently reachable, so each must be correct alone.
+ */
+const PUBLIC_PATHS = new Set(["/api/health"]);
+
 /** The login transaction only has to survive one redirect to the IdP and back. */
 const TXN_TTL_S = 600;
 
@@ -258,6 +273,11 @@ export const handler = async (event) => {
     }
     return respond(404, "Not Found", errorPage("Not found", "No such sign-in route."));
   }
+
+  // AFTER the header strip and the host check, so a public path is still
+  // reached only on an admitted host and still cannot carry a forged identity.
+  // Before the session check, because it must answer without one.
+  if (PUBLIC_PATHS.has(uri)) return request;
 
   const session = verify(config.sessionKey, cookies[SESSION_COOKIE]);
   if (session?.email) return injectIdentity(request, config, session);

@@ -171,106 +171,35 @@ resource "aws_bcmdataexports_export" "cur" {
   }
 }
 
-# --- Catalogue ---------------------------------------------------------------
-
-resource "aws_glue_catalog_database" "finops" {
-  name        = replace(var.name_prefix, "-", "_")
-  description = "Cost and Usage Report, covering every environment in the account."
-}
-
-resource "aws_glue_crawler" "cur" {
-  name          = var.name_prefix
-  database_name = aws_glue_catalog_database.finops.name
-  role          = aws_iam_role.crawler.arn
-  # The export lands a new billing period monthly and restates the current one
-  # daily; a daily crawl keeps partitions current without paying for hourly runs.
-  schedule = "cron(0 3 * * ? *)"
-
-  s3_target {
-    path = "s3://${aws_s3_bucket.cur.bucket}/${local.cur_data_path}"
-  }
-
-  configuration = jsonencode({
-    Version = 1.0
-    # Without this the crawler creates a NEW table each time the schema shifts —
-    # and a CUR schema shifts whenever AWS adds a column, which is often. The
-    # FinOps page would then query a table that stopped being updated.
-    Grouping = { TableGroupingPolicy = "CombineCompatibleSchemas" }
-    CrawlerOutput = {
-      Partitions = { AddOrUpdateBehavior = "InheritFromTable" }
-    }
-  })
-}
-
-resource "aws_iam_role" "crawler" {
-  name = "${var.name_prefix}-crawler"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "glue.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "crawler_service" {
-  role       = aws_iam_role.crawler.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
-}
-
-resource "aws_iam_role_policy" "crawler_s3" {
-  name = "read-cur"
-  role = aws_iam_role.crawler.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["s3:GetObject", "s3:ListBucket"]
-      Resource = [aws_s3_bucket.cur.arn, "${aws_s3_bucket.cur.arn}/*"]
-    }]
-  })
-}
-
-resource "aws_athena_workgroup" "finops" {
-  name = var.name_prefix
-
-  configuration {
-    enforce_workgroup_configuration    = true
-    publish_cloudwatch_metrics_enabled = true
-    # Higher than the app workgroup's cap: a cost query legitimately scans more
-    # than a training log does, but it is still bounded so a missing WHERE
-    # clause costs cents rather than dollars.
-    bytes_scanned_cutoff_per_query = var.athena_scan_limit_bytes
-
-    result_configuration {
-      output_location = "s3://${aws_s3_bucket.cur.bucket}/athena-results/"
-      encryption_configuration {
-        encryption_option = "SSE_S3"
-      }
-    }
-  }
-}
+# --- No catalogue ------------------------------------------------------------
+#
+# Deleted with Glue and Athena (ADR-0025). The CUR is Parquet in S3 and the API
+# Lambda reads it directly with DuckDB:
+#
+#   SELECT ... FROM read_parquet('s3://bucket/cur/**/*.parquet',
+#                                hive_partitioning = true)
+#
+# The crawler that used to live here was the worst part of the old design: it
+# ran on a schedule, so a freshly delivered export was invisible for hours, and
+# it needed CombineCompatibleSchemas because a CUR gains columns whenever AWS
+# adds a service — without which it silently created a NEW table and left the
+# old one to go stale.
 
 # --- Cross-stack contract ----------------------------------------------------
 # Published at a GLOBAL path, not under an environment, because the values are
 # identical everywhere. Publishing them per environment would imply a per
 # environment truth that does not exist.
 
-resource "aws_ssm_parameter" "glue_database" {
-  name  = "/${var.app_name}/global/finops/glue_database"
-  type  = "String"
-  value = aws_glue_catalog_database.finops.name
-}
-
-resource "aws_ssm_parameter" "athena_workgroup" {
-  name  = "/${var.app_name}/global/finops/athena_workgroup"
-  type  = "String"
-  value = aws_athena_workgroup.finops.name
-}
-
 resource "aws_ssm_parameter" "bucket" {
   name  = "/${var.app_name}/global/finops/bucket"
   type  = "String"
   value = aws_s3_bucket.cur.bucket
 }
+
+resource "aws_ssm_parameter" "prefix" {
+  name        = "/${var.app_name}/global/finops/prefix"
+  description = "Where the export lands. The API globs beneath it; there is no catalogue to consult."
+  type        = "String"
+  value       = local.cur_data_path
+}
+

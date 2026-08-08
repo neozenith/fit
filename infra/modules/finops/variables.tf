@@ -12,12 +12,3 @@ variable "bucket_region" {
   type        = string
 }
 
-variable "athena_scan_limit_bytes" {
-  description = <<-EOT
-    Per-query byte ceiling. Higher than the application workgroup's because a
-    cost query legitimately scans more than a training log does, but still
-    bounded so a missing WHERE clause costs cents rather than dollars.
-  EOT
-  type        = number
-  default     = 10737418240 # 10 GiB
-}

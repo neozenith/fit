@@ -17,10 +17,3 @@ output "archive_bucket_arn" {
   value = aws_s3_bucket.archive.arn
 }
 
-output "glue_database" {
-  value = aws_glue_catalog_database.archive.name
-}
-
-output "athena_workgroup" {
-  value = aws_athena_workgroup.app.name
-}

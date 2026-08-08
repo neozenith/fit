@@ -46,7 +46,6 @@ resource "aws_lambda_function" "archive" {
     variables = {
       TABLE_PREFIX      = var.name_prefix
       ARCHIVE_BUCKET    = var.archive_bucket
-      GLUE_DATABASE     = var.glue_database
       HOT_WINDOW_MONTHS = tostring(var.hot_window_months)
     }
   }
@@ -111,12 +110,6 @@ resource "aws_iam_role_policy" "archive" {
         # object back before anything is deleted.
         Action   = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
         Resource = [var.archive_bucket_arn, "${var.archive_bucket_arn}/*"]
-      },
-      {
-        Sid      = "RegisterPartitions"
-        Effect   = "Allow"
-        Action   = ["glue:BatchCreatePartition", "glue:GetTable", "glue:GetPartition", "glue:GetDatabase"]
-        Resource = "*"
       },
     ]
   })

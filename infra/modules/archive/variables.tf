@@ -6,7 +6,6 @@ variable "region" { type = string }
 
 variable "archive_bucket" { type = string }
 variable "archive_bucket_arn" { type = string }
-variable "glue_database" { type = string }
 
 variable "hot_window_months" {
   description = <<-EOT

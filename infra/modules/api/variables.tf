@@ -16,19 +16,17 @@ variable "table_arns" {
 
 variable "archive_bucket" { type = string }
 variable "archive_bucket_arn" { type = string }
-variable "glue_database" { type = string }
-variable "athena_workgroup" { type = string }
 
-variable "finops_database" {
-  description = "Glue database of the global FinOps stack. Same value in every environment (ADR-0015)."
+variable "finops_bucket" {
+  description = "Bucket holding the CUR export. Same value in every environment (ADR-0015)."
   type        = string
   default     = ""
 }
 
-variable "finops_workgroup" {
-  description = "Athena workgroup of the global FinOps stack."
+variable "finops_prefix" {
+  description = "Prefix beneath which the export lands. Globbed by DuckDB; there is no catalogue (ADR-0025)."
   type        = string
-  default     = ""
+  default     = "cur"
 }
 
 variable "finops_bucket_arn" {
@@ -39,4 +37,22 @@ variable "finops_bucket_arn" {
   EOT
   type        = string
   default     = ""
+}
+
+variable "duckdb_layer_arn" {
+  description = <<-EOT
+    Lambda layer providing DuckDB, built for linux-arm64.
+
+    Required, with no default: the query path imports it at module scope so a
+    missing or wrong-architecture layer fails at cold start rather than on the
+    first cost query. `npm` and `bun` resolve the native binding for the BUILD
+    HOST, so this layer must be built in CI on linux-arm64 — one built on a
+    laptop ships a darwin binary and fails with a module-resolution error.
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws:lambda:", var.duckdb_layer_arn))
+    error_message = "duckdb_layer_arn must be a Lambda layer ARN."
+  }
 }

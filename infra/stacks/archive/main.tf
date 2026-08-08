@@ -10,10 +10,6 @@ data "aws_ssm_parameter" "archive_bucket" {
   name = "/${local.app_name}/${var.environment}/data/archive_bucket"
 }
 
-data "aws_ssm_parameter" "glue_database" {
-  name = "/${local.app_name}/${var.environment}/data/glue_database"
-}
-
 module "archive" {
   source = "../../modules/archive"
 
@@ -25,7 +21,6 @@ module "archive" {
 
   archive_bucket     = data.aws_ssm_parameter.archive_bucket.value
   archive_bucket_arn = "arn:aws:s3:::${data.aws_ssm_parameter.archive_bucket.value}"
-  glue_database      = data.aws_ssm_parameter.glue_database.value
 
   hot_window_months = local.env.hot_window_months
   pyarrow_layer_arn = local.config.pyarrow_layer_arn

@@ -9,10 +9,11 @@
     "dev": "bun run --hot src/server.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "3.907.0",
-    "@aws-sdk/lib-dynamodb": "3.907.0",
-    "@aws-sdk/client-ssm": "3.907.0",
     "@aws-sdk/client-athena": "3.907.0",
+    "@aws-sdk/client-dynamodb": "3.907.0",
+    "@aws-sdk/client-ssm": "3.907.0",
+    "@aws-sdk/lib-dynamodb": "3.907.0",
+    "@duckdb/node-api": "1.5.5-r.3",
     "zod": "4.1.12"
   }
 }

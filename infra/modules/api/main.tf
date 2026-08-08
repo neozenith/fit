@@ -33,20 +33,28 @@ resource "aws_lambda_function" "api" {
 
   architectures = ["arm64"] # ~20% cheaper per GB-second than x86_64
 
+  # DuckDB, which replaced Glue and Athena (ADR-0025). A LAYER rather than a
+  # bundled dependency, so an application deploy re-uploads kilobytes instead of
+  # 30MB.
+  #
+  # It must be built for linux-arm64: npm and bun resolve the native binding for
+  # the BUILD HOST, so a layer built on a laptop ships the darwin binary and
+  # fails at cold start with a module-resolution error that says nothing about
+  # architecture.
+  layers = [var.duckdb_layer_arn]
+
   environment {
     variables = {
-      APP_NAME         = var.app_name
-      ENVIRONMENT      = var.environment
-      SSM_PREFIX       = "/${var.app_name}/${var.environment}"
-      TABLE_PREFIX     = var.name_prefix
-      ARCHIVE_BUCKET   = var.archive_bucket
-      GLUE_DATABASE    = var.glue_database
-      ATHENA_WORKGROUP = var.athena_workgroup
+      APP_NAME       = var.app_name
+      ENVIRONMENT    = var.environment
+      SSM_PREFIX     = "/${var.app_name}/${var.environment}"
+      TABLE_PREFIX   = var.name_prefix
+      ARCHIVE_BUCKET = var.archive_bucket
       # The FinOps stack is global and its identifiers do not vary per
       # environment — every environment reads the same cost data (ADR-0015).
-      FINOPS_DATABASE  = var.finops_database
-      FINOPS_WORKGROUP = var.finops_workgroup
-      NODE_OPTIONS     = "--enable-source-maps"
+      FINOPS_BUCKET = var.finops_bucket
+      FINOPS_PREFIX = var.finops_prefix
+      NODE_OPTIONS  = "--enable-source-maps"
     }
   }
 
@@ -139,26 +147,6 @@ resource "aws_iam_role_policy" "api" {
           Effect   = "Allow"
           Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
           Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/${var.app_name}/${var.environment}/*"
-        },
-        {
-          Sid    = "ColdArchiveQuery"
-          Effect = "Allow"
-          Action = [
-            "athena:StartQueryExecution",
-            "athena:GetQueryExecution",
-            "athena:GetQueryResults",
-            "athena:GetWorkGroup",
-          ]
-          Resource = [
-            "arn:aws:athena:${var.region}:${var.account_id}:workgroup/${var.athena_workgroup}",
-            "arn:aws:athena:${var.region}:${var.account_id}:workgroup/${var.finops_workgroup}",
-          ]
-        },
-        {
-          Sid      = "GlueCatalog"
-          Effect   = "Allow"
-          Action   = ["glue:GetDatabase", "glue:GetTable", "glue:GetTables", "glue:GetPartition", "glue:GetPartitions"]
-          Resource = "*"
         },
         {
           Sid      = "ArchiveObjects"

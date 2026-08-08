@@ -22,6 +22,19 @@ name: Cold start
 #
 # So: a manual, deliberate, CI-run sequence. It is `workflow_dispatch` only —
 # there is no Git event that should ever trigger a whole-environment apply.
+#
+# GOTCHA, and it bites exactly once: GitHub only exposes a `workflow_dispatch`
+# workflow that exists on the DEFAULT branch. Until this file is merged to
+# `main`, `gh workflow run cold-start.yml` answers 404 no matter what `--ref`
+# says. So on a brand-new repository the order is:
+#
+#   1. merge the branch that introduces this file,
+#   2. THEN dispatch it per environment.
+#
+# Which means the very first merge to `main` will show `api` and `edge` failing
+# their apply — the same empty-account condition this workflow exists to fix,
+# arriving one commit before the fix is dispatchable. That is expected, and it
+# is self-correcting: dispatch this immediately after the merge.
 
 on:
   workflow_dispatch:

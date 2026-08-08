@@ -171,6 +171,17 @@ so it cannot run in the pipeline it bootstraps.
 | `e2e/` | Playwright, one project per environment. |
 | `docs/questions/` | Open questions, each with the assumption taken. |
 
+## Documents
+
+| Document | What it is for |
+|---|---|
+| [`ADRs.md`](ADRs.md) | Every structural decision, each with a forward **Lens**. |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | The deployed shape and the failure inventory. |
+| [`GLOSSARY.md`](GLOSSARY.md) | The vocabulary. Read it before naming anything. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | The loop, the invariants, and how promotion works. |
+| [`CLAUDE.md`](CLAUDE.md) | Operating notes and gotchas for an agent. |
+| [`docs/domain-model.md`](docs/domain-model.md) | What the training program actually is. |
+
 ## Reading order for the reasoning
 
 1. [`ADRs.md`](ADRs.md) — every structural decision, each carrying a **Lens**:

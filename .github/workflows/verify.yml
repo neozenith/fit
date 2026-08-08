@@ -1,0 +1,111 @@
+name: Verify
+
+# Run the FULL verification suite against a deployed environment: every API
+# route, then every page in a real browser.
+#
+# It lives in CI rather than on a laptop for a reason that is not convenience.
+# A freshly-created Route53 record is invisible to any resolver that has already
+# cached a negative answer for that name, so "it does not resolve on my machine"
+# and "the environment is broken" look identical from a laptop for as long as
+# the negative TTL lasts. A runner has no such cache, so a failure here is a
+# failure of the environment and nothing else.
+#
+# Dispatch-only. It authenticates by minting a session from the environment's
+# own SSM key (ADR-0011), so it needs no stored credential — and the session it
+# mints is marked `actor=agent`, which is visible in the app and in the logs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to verify
+        required: true
+        type: choice
+        options: [dev, test, prod]
+  # Also on a tag, so a release is verified in prod without anyone remembering
+  # to ask. It cannot gate the deploy — the deploy is what it verifies — but an
+  # unverified release is at least a red mark next to the tag.
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: verify-${{ inputs.environment || 'prod' }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_ENV: ${{ inputs.environment || 'prod' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - run: bun install --frozen-lockfile
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-verify-${{ github.run_id }}
+
+      - name: Wait for the environment to answer
+        # A distribution that has just been updated propagates for minutes. This
+        # polls the ONE endpoint that needs no session, so a slow propagation
+        # shows up as a wait rather than as a wall of authentication failures.
+        run: |
+          for _ in $(seq 1 40); do
+            if curl -fsS "https://$( [ "$TARGET_ENV" = prod ] && echo fit || echo fit-$TARGET_ENV ).jpeak.ai/api/health" >/dev/null 2>&1; then
+              echo "environment is answering"; exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::$TARGET_ENV did not answer /api/health within 10 minutes"
+          exit 1
+
+      - name: Smoke — every API route
+        run: bun run tools/smoke.ts --env "$TARGET_ENV"
+
+      - name: Cache the Playwright browser
+        id: pw-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browser
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: bun run --cwd e2e install-browser
+
+      - name: Browser suite
+        run: bun run --cwd e2e test -- --project="$TARGET_ENV"
+
+      - name: Screenshots
+        # Runs even when the suite fails — a screenshot of the broken state is
+        # worth more than one of the working state.
+        if: always()
+        run: bun run e2e/screenshots.ts --env "$TARGET_ENV" --out artifacts
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verify-${{ inputs.environment || 'prod' }}
+          path: |
+            artifacts/
+            e2e/playwright-report/
+          retention-days: 14

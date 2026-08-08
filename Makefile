@@ -172,6 +172,10 @@ dev: seed ## Run the whole app locally: API + SPA
 # Agentic access — mint a session from the environment's SSM key (ADR-0011)
 # ---------------------------------------------------------------------------
 
+.PHONY: init-env
+init-env: ## Give a deployed ENV its first training block, through the public API
+	bun run tools/init-env.ts --env $(ENV)
+
 .PHONY: token
 token: ## Mint a short-lived session cookie for ENV=<local|dev|test|prod>
 	bun run tools/mint-token.ts --env $(ENV)

@@ -1,4 +1,22 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures.js";
+
+/**
+ * Does this environment have a training block yet?
+ *
+ * A freshly stood-up environment legitimately has none, and several assertions
+ * below only mean something once one exists. The check has to be exact, because
+ * the obvious version is subtly broken:
+ *
+ *   page.getByText(/No block yet/).isVisible().catch(() => false)
+ *
+ * `getByText` matches the banner AND its ancestors, so strict mode throws — and
+ * the `.catch(() => false)` then reports "not empty" for an environment that is
+ * empty, so the test proceeds and fails on missing data. Counting a `data-`
+ * hook is unambiguous and cannot resolve to more than one node per card.
+ */
+const hasBlock = async (page: Page): Promise<boolean> =>
+  (await page.getByTestId("session-card").count()) > 0;
 
 /**
  * The suite runs identically against local, dev, test and prod.
@@ -54,11 +72,7 @@ test.describe("today", () => {
     await page.goto("/#/today");
     await expect(page.locator("main h1")).toBeVisible();
 
-    const empty = await page
-      .getByText(/No block yet/)
-      .isVisible()
-      .catch(() => false);
-    test.skip(empty, "environment has no block yet");
+    test.skip(!(await hasBlock(page)), "environment has no block yet");
 
     // All three lifts, because the entire six weeks is projected from them.
     for (const lift of ["Squat", "Bench", "Deadlift"]) {
@@ -73,6 +87,8 @@ test.describe("block", () => {
     await page.goto("/#/block");
     const squat = page.locator("#squat");
     await expect(squat).toBeVisible();
+
+    test.skip(!(await hasBlock(page)), "environment has no block yet");
 
     const before = await page.getByTestId("session-card").first().innerText();
 
@@ -89,6 +105,7 @@ test.describe("block", () => {
 
   test("week navigation moves through all five prescribed weeks", async ({ page }) => {
     await page.goto("/#/block");
+    test.skip(!(await hasBlock(page)), "environment has no block yet");
     // Scoped to the card that owns the week switcher. `main h2` first would
     // match "Seed values", which never changes and would pass forever.
     const weekCard = page.locator(".card").filter({ has: page.locator(".nav") });
@@ -100,6 +117,7 @@ test.describe("block", () => {
 
   test("week 5 prescribes a single 1-4 rep test set per lift", async ({ page }) => {
     await page.goto("/#/block");
+    test.skip(!(await hasBlock(page)), "environment has no block yet");
     await page.getByRole("button", { name: "Week 5", exact: true }).click();
     // `x1-4` is the measurement the next block is seeded from — if it is
     // missing, the recursion has no input.
@@ -112,11 +130,7 @@ test.describe("log", () => {
     await page.goto("/#/log");
     await expect(page.locator("main h1")).toHaveText("Log");
 
-    const noBlock = await page
-      .getByText(/Start a block first/)
-      .isVisible()
-      .catch(() => false);
-    test.skip(noBlock, "environment has no block yet");
+    test.skip((await page.getByRole("combobox").count()) === 0, "environment has no block yet");
 
     await expect(page.locator("#session")).toBeVisible();
     // A pre-filled weight is the whole ergonomic argument for the page.
@@ -154,10 +168,11 @@ test.describe("cost", () => {
       .getByRole("heading", { name: "Breakdown" })
       .isVisible()
       .catch(() => false);
-    const explained = await page
-      .getByText(/has not been deployed/i)
-      .isVisible()
-      .catch(() => false);
+    // Three valid states, not two: a breakdown, "the stack is not deployed", or
+     // "the catalogue has no data yet". The third is the normal state for hours
+     // after a cold start, and omitting it made this test fail on a healthy
+     // environment.
+    const explained = (await page.getByText(/has not been deployed|no data yet/i).count()) > 0;
 
     expect(hasBreakdown || explained).toBe(true);
   });

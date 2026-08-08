@@ -79,8 +79,23 @@ ci: format-check lint typecheck test tf-check ## The gate before pushing. Free a
 # against real state (ADR-0006).
 # ---------------------------------------------------------------------------
 
+.PHONY: tf-workflows
+tf-workflows: ## Every stack has a CI caller, and every caller has a stack
+	# Checked because the failure is SILENT in the worst direction: a stack with
+	# no caller simply never deploys, and nothing anywhere reports that. The
+	# `archive` stack sat in exactly that state until this check was written.
+	@set -e; missing=0; \
+	for d in infra/stacks/*/; do s=$$(basename "$$d"); \
+	  if [ ! -f ".github/workflows/tf-$$s.yml" ]; then \
+	    echo "ERROR: stack '$$s' has no .github/workflows/tf-$$s.yml"; missing=1; fi; done; \
+	for f in .github/workflows/tf-*.yml; do s=$$(basename "$$f" .yml | sed 's/^tf-//'); \
+	  if [ ! -d "infra/stacks/$$s" ]; then \
+	    echo "ERROR: workflow tf-$$s.yml has no stack infra/stacks/$$s"; missing=1; fi; done; \
+	[ "$$missing" = "0" ] && echo "==> every stack has a caller, and every caller a stack"; \
+	exit $$missing
+
 .PHONY: tf-check
-tf-check: ## fmt-check + validate every stack. No cloud, no state.
+tf-check: tf-workflows ## fmt-check + validate every stack. No cloud, no state.
 	@set -e; \
 	terraform fmt -check -recursive infra; \
 	for dir in infra/stacks/*/; do \

@@ -1,0 +1,559 @@
+# Architecture Decision Records
+
+Every entry states the decision, the forces behind it, and — critically — the
+**Lens** it projects forward. The Lens is the reusable rule: when a later
+question falls inside a Lens, the answer is already made and does not become an
+open question. Check this file before adding anything to
+[`docs/questions/`](docs/questions/).
+
+Status values: `Accepted`, `Superseded by ADR-NNNN`, `Proposed`.
+
+| ADR | Decision | Status |
+|---|---|---|
+| [0001](#adr-0001--the-program-is-a-pure-function-not-stored-rows) | The program is a pure function, not stored rows | Accepted |
+| [0002](#adr-0002--one-aws-account-three-environments-separated-by-name-and-tag) | One AWS account, three environments separated by name and tag | Accepted |
+| [0003](#adr-0003--scale-to-zero-means-lambda--dynamodb-not-a-parked-container) | Scale-to-zero means Lambda + DynamoDB, not a parked container | Accepted |
+| [0004](#adr-0004--cloudformation-is-the-trust-floor-below-terraform) | CloudFormation is the trust floor below Terraform | Accepted |
+| [0005](#adr-0005--terraform-state-is-one-bucket-keyed-by-stack-and-environment) | Terraform state is one bucket, keyed by stack and environment | Accepted |
+| [0006](#adr-0006--ci-is-the-only-actor-that-runs-terraform) | CI is the only actor that runs Terraform | Accepted |
+| [0007](#adr-0007--git-event-selects-the-environment-draft--plan-pr--dev-main--test-tag--prod) | Git event selects the environment | Accepted |
+| [0008](#adr-0008--stacks-are-sized-by-blast-radius-and-change-cadence) | Stacks are sized by blast radius and change cadence | Accepted |
+| [0009](#adr-0009--authentication-terminates-at-lambdaedge-never-in-the-application) | Authentication terminates at Lambda@Edge, never in the application | Accepted |
+| [0010](#adr-0010--entraid-is-the-only-identity-provider) | EntraID is the only identity provider | Accepted |
+| [0011](#adr-0011--the-session-hmac-key-is-the-agentic-test-key) | The session HMAC key is the agentic test key | Accepted |
+| [0012](#adr-0012--hot-data-lives-in-dynamodb-cold-data-becomes-parquet-on-s3) | Hot data lives in DynamoDB, cold data becomes Parquet on S3 | Accepted |
+| [0013](#adr-0013--observations-are-append-only-and-never-rewritten-by-the-program) | Observations are append-only and never rewritten by the program | Accepted |
+| [0014](#adr-0014--every-resource-carries-project-and-environment-cost-allocation-tags) | Every resource carries Project and Environment cost-allocation tags | Accepted |
+| [0015](#adr-0015--finops-is-one-environment-agnostic-stack-readable-from-every-environment) | FinOps is one environment-agnostic stack, readable from every environment | Accepted |
+| [0016](#adr-0016--local-development-runs-the-real-handlers-against-emulated-aws) | Local development runs the real handlers against emulated AWS | Accepted |
+| [0017](#adr-0017--sydney-for-data-us-east-1-only-where-aws-forces-it) | Sydney for data, us-east-1 only where AWS forces it | Accepted |
+| [0018](#adr-0018--single-tenant-single-user-by-construction) | Single-tenant, single-user by construction | Accepted |
+| [0019](#adr-0019--typescript-everywhere-in-the-request-path-python-only-for-analytics) | TypeScript everywhere in the request path, Python only for analytics | Accepted |
+| [0020](#adr-0020--questions-are-queued-never-blocking) | Questions are queued, never blocking | Accepted |
+
+---
+
+## ADR-0001 — The program is a pure function, not stored rows
+
+**Status:** Accepted
+
+**Context.** The source spreadsheet computes every prescribed weight from three
+`Inputs!` cells (`B14` bench, `B15` squat, `B16` deadlift 1RMs), a units flag,
+and a start date. A Week 3 squat cell is literally
+`MROUND(1RM_squat * 0.85, 2.5) + 2.5`. Not one prescribed weight is typed by
+hand; all 6 weeks are a projection of the block's seed.
+
+The naive port stores the computed grid — 6 weeks × ~5 sessions × ~7 exercises
+of denormalised weights. That representation is wrong the moment a 1RM is
+corrected (the spreadsheet's own rule: *"if you ever fail a required rep, reduce
+your max by 2.5%"*), because every downstream row silently goes stale.
+
+**Decision.** The program is a **pure generator**: `(BlockConfig) → Session[]`.
+Nothing prescribed is persisted. DynamoDB stores only the *inputs* (block
+config: seed 1RMs, units, start date, accessory choices) and the *outputs*
+(observations: what was actually lifted). The prescription is recomputed on
+every read.
+
+**Consequences.** Correcting a 1RM is a single-item write that re-projects the
+whole block. The engine is a dependency-free module testable without any AWS
+surface, and the spreadsheet's own values become golden-test fixtures.
+
+> **Lens.** If a value can be derived from stored inputs, derive it. Persist
+> inputs and observations; never persist a projection. When asked "where do we
+> store X?", first ask whether X is a projection.
+
+---
+
+## ADR-0002 — One AWS account, three environments separated by name and tag
+
+**Status:** Accepted
+
+**Context.** `fit` is a single-user personal application. A multi-account
+landing zone would triple the bootstrap surface and the DNS delegation work for
+no isolation benefit that a naming convention does not already give at this
+scale.
+
+**Decision.** All three environments live in account `947404949660`. Isolation
+is by resource-name prefix (`fit-{env}-*`), IAM path, DynamoDB table name, SSM
+parameter prefix (`/fit/{env}/`), and the `Environment` tag. The `jpeak.ai`
+hosted zone already lives in this account, so DNS is direct record creation.
+
+**Consequences.** A stack must never reference a resource without its `{env}`
+segment. Cross-environment blast radius is prevented by naming discipline, not
+by an account boundary — which is exactly why ADR-0014's tagging is mandatory
+rather than nice-to-have, and why the FinOps stack can see all three
+environments at once (ADR-0015).
+
+> **Lens.** Environment is a *string in a name*, not an account. Any new
+> resource is named `fit-{env}-<thing>` and any new parameter lives under
+> `/fit/{env}/`. No question about "which account" is open.
+
+---
+
+## ADR-0003 — Scale-to-zero means Lambda + DynamoDB, not a parked container
+
+**Status:** Accepted
+
+**Context.** The container-based prior art achieved scale-to-zero by parking an
+ECS service at `desired_count = 0` and adding an origin-request Lambda@Edge hook
+that woke the service and returned a `202 Warming` page while it started. That
+machinery — the wake hook, the parked CNAME that must stay resolvable, the
+`min_ttl = 0` on 502/504 so a cached error cannot bypass the hook — exists
+purely to hide container start latency.
+
+A fitness tracker serves a handful of requests a day to one user. The workload
+has no warm-path requirement that justifies any of it.
+
+**Decision.** The request path is CloudFront → S3 (SPA) and CloudFront → Lambda
+Function URL (API), with DynamoDB on-demand behind it. There is no VPC, no NAT
+gateway, no ECS, no ALB, and no wake hook. Idle cost is the hosted zone, the
+CloudFront distribution, and stored bytes.
+
+**Consequences.** Cold start is a Lambda cold start (~200ms for a Bun/Node
+handler), not a container start — cheap enough to need no warming UX. Removing
+the VPC removes the single largest fixed cost in the prior architecture. The
+`202 Warming` page, the parked CNAME gotcha, and the error-TTL interlock are all
+*deliberately absent*; do not port them.
+
+> **Lens.** Prefer the managed primitive that bills at zero when idle. Any
+> proposal that adds an always-on component (NAT, ALB, RDS, a warm pool) needs
+> an ADR of its own that names what breaks without it.
+
+---
+
+## ADR-0004 — CloudFormation is the trust floor below Terraform
+
+**Status:** Accepted
+
+**Context.** Terraform needs a state bucket to write state into, and a role to
+assume before it can create either. That circularity has to be broken outside
+Terraform.
+
+**Decision.** Two idempotent CloudFormation stacks, run by a human from a
+laptop, create everything Terraform depends on and nothing else:
+
+1. `github-oidc-baseline` — the account-singleton GitHub OIDC provider. One per
+   *account*, because IAM permits only one provider per issuer URL, so it can
+   never live in a per-app stack.
+2. `fit-bootstrap` — the state bucket and the repo-scoped deployer role, which
+   imports the provider ARN via `Fn::ImportValue`.
+
+Both the bucket and the zone carry `DeletionPolicy: Retain`.
+
+**Consequences.** `terraform destroy` — or deleting the bootstrap stack itself —
+cannot destroy the state that describes the platform. The bootstrap is the one
+layer a human runs; everything above it is CI-only (ADR-0006).
+
+> **Lens.** If Terraform would need a resource in order to create that same
+> resource, it belongs in the CloudFormation bootstrap. Nothing else does.
+
+---
+
+## ADR-0005 — Terraform state is one bucket, keyed by stack and environment
+
+**Status:** Accepted
+
+**Context.** Six stacks × three environments is eighteen state files. A bucket
+per combination is eighteen bootstrap resources to manage.
+
+**Decision.** One bucket, `fit-tfstate-947404949660`, versioned and encrypted,
+with keys of the form `{stack}/{env}.tfstate`. Locking is S3-native
+(`use_lockfile = true`) — there is no DynamoDB lock table. Backends are
+**partial**: each stack ships `backends/{env}.config` and CI passes it to
+`terraform init -backend-config=`.
+
+**Consequences.** A stack's blast radius is exactly its own key. Two stacks
+deploy concurrently without contending for a lock; two environments of the same
+stack also do not contend. Because the backend is partial, any local `terraform`
+command inherits whichever environment was last initialised — which is a hazard,
+and one more reason for ADR-0006.
+
+> **Lens.** New stack ⇒ new `backends/*.config` per environment, same bucket,
+> key `{stack}/{env}.tfstate`. No question about state layout is open.
+
+---
+
+## ADR-0006 — CI is the only actor that runs Terraform
+
+**Status:** Accepted
+
+**Context.** Partial backends (ADR-0005) mean a local `terraform apply` silently
+targets the last-initialised environment. Local state drift is invisible to the
+plan a reviewer reads on a pull request.
+
+**Decision.** No `terraform apply` or `terraform plan` against real state
+happens outside GitHub Actions. The local surface is `make tf-check`:
+`fmt -check` plus `init -backend=false` plus `validate`. It touches no cloud and
+no state.
+
+**Consequences.** The plan posted on the pull request is the only plan, and it
+is therefore trustworthy. An agent (including this one) verifies infrastructure
+changes by reading CI output, not by applying locally.
+
+> **Lens.** "Just apply it locally to check" is never the answer. Push, and read
+> the plan.
+
+---
+
+## ADR-0007 — Git event selects the environment (draft → plan, PR → dev, main → test, tag → prod)
+
+**Status:** Accepted
+
+**Context.** Promotion needs to be mechanical and unambiguous, and the mapping
+must be visible without reading workflow YAML.
+
+**Decision.** One reusable workflow owns the routing; per-stack callers only
+pass their stack name and path filters.
+
+| Git event | Result |
+|---|---|
+| Draft pull request | `ci` + `plan` matrix across dev/test/prod. No apply. |
+| Ready-for-review pull request | `ci` + `plan` + `apply / dev` |
+| Push to `main` | `ci` + `plan` + `apply / test` |
+| Push of a `v*` tag | `ci` + `plan` + `apply / prod` |
+
+`plan` runs on **every** trigger across **all three** environments, and every
+apply `needs: [ci, plan]`. `plan` deliberately binds no GitHub Environment —
+prod is gated to `v*` tags, so a `plan / prod` job on a PR branch would be
+rejected by its own gate. Plans take the deployer role from the repo-level
+variable instead; only applies bind `environment:`.
+
+**Consequences.** A draft PR is a genuine, zero-risk "what would this do
+everywhere" report. Marking a PR ready for review is the act that first mutates
+cloud state, and it mutates dev only.
+
+> **Lens.** Promotion is a Git event, never a workflow input. Adding a manual
+> `workflow_dispatch` path to any environment other than prod needs its own ADR.
+
+---
+
+## ADR-0008 — Stacks are sized by blast radius and change cadence
+
+**Status:** Accepted
+
+**Context.** A single stack means every frontend tweak re-plans the database and
+the certificate. Too many stacks means cross-stack data-passing complexity.
+
+**Decision.** Six stacks. Five are per-environment; one is global.
+
+| Stack | Owns | Changes when |
+|---|---|---|
+| `identity` | SSM shells for IdP credentials, generated session HMAC key | IdP config changes (rare) |
+| `data` | DynamoDB tables, archive bucket, Glue database | schema changes (rare) |
+| `api` | API Lambda, its role, its Function URL | app code changes (often) |
+| `edge` | ACM cert, CloudFront, auth Lambda@Edge, DNS record, SPA bucket | routing/auth changes (rare, slow) |
+| `archive` | age-out Lambda, its schedule | retention policy changes (rare) |
+| `finops` | CUR export, Glue, Athena workgroup | global; merge to `main` only |
+
+Cross-stack reads go through SSM parameters under `/fit/{env}/`, never through
+`terraform_remote_state` — the reader must not need the writer's state file or
+its backend credentials.
+
+**Consequences.** A CloudFront change (15+ minutes to propagate) never blocks an
+API deploy (seconds). Stacks are also the unit of path filtering in CI, so an
+`api` change does not queue behind an `edge` plan.
+
+> **Lens.** New infrastructure joins the stack whose *cadence* it matches, not
+> the stack whose *diagram box* it sits nearest. If it changes on a different
+> rhythm than everything in the candidate stack, it is a new stack.
+
+---
+
+## ADR-0009 — Authentication terminates at Lambda@Edge, never in the application
+
+**Status:** Accepted
+
+**Context.** An application that checks its own authentication can be reached
+un-authenticated by anything that bypasses the front door — a Function URL
+called directly, an S3 object fetched by its bucket URL.
+
+**Decision.** A viewer-request Lambda@Edge function is the sole authenticator.
+It:
+
+1. **Strips every inbound `x-auth-*` header first**, before any other logic. A
+   header the function sets but forgets to strip is free privilege escalation,
+   because CloudFront forwards viewer headers to the origin verbatim.
+2. Rejects any non-canonical `Host` with **421**, never 403 — a 403 would be
+   laundered into the app by the SPA error rewrite.
+3. Handles `/oauth2/*` entirely at the edge; the origin never sees those paths.
+4. On a valid `__session` cookie, injects `x-auth-email`, `x-auth-exp` (300s
+   TTL) and `x-auth-sig = HMAC(email.exp)`.
+
+The origin verifies the signature and trusts nothing else. The Function URL uses
+`AWS_IAM` auth with an origin-access control, so it is unreachable without
+CloudFront's signature.
+
+**Consequences.** The application has no login code, no session store, and no
+IdP dependency. Its entire auth surface is "verify one HMAC".
+
+> **Lens.** Identity is asserted at the edge and verified at the origin. Any
+> proposal to add an auth check *inside* the app is a proposal to add a second
+> source of truth — reject it.
+
+---
+
+## ADR-0010 — EntraID is the only identity provider
+
+**Status:** Accepted
+
+**Context.** The prior art supports a pluggable provider map with a chooser page
+for multiple IdPs. The operator here has exactly one tenant
+(`89e9e78f-7730-4825-b42f-fb0986fe3088`) and is the only user (ADR-0018).
+
+**Decision.** EntraID only, via OIDC authorization-code flow with PKCE.
+Admission is `claims.tid == entra_tenant_id` **and** the email appearing in an
+explicit allow-list. The chooser page is not built — with one provider the edge
+redirects straight to the authorize URL.
+
+The provider surface is still isolated in a `PROFILES` map so that adding a
+second IdP is one map entry plus its SSM shells, not a refactor.
+
+**Consequences.** No chooser UI, no home-realm discovery, no per-provider
+branching in the callback — the token is verified against exactly one JWKS,
+issuer and audience.
+
+> **Lens.** One provider, allow-listed by tenant *and* email. Both checks, or
+> the tenant check alone admits every account in the tenant.
+
+---
+
+## ADR-0011 — The session HMAC key is the agentic test key
+
+**Status:** Accepted
+
+**Context.** Verifying a deployed environment end-to-end requires an
+authenticated session. Driving an interactive EntraID sign-in from a headless
+agent is fragile, and stashing a long-lived bearer token anywhere is worse.
+
+**Decision.** The `identity` stack generates one HMAC key per environment into
+`/fit/{env}/session_hmac_key` (SecureString). That key signs the `__session`
+cookie, `x-auth-sig`, and nothing else. A CLI (`make token ENV=dev`) reads the
+parameter with the caller's own AWS credentials and mints a short-lived session
+cookie locally.
+
+Minted sessions carry a **10 minute** expiry — long enough for a Playwright run,
+short enough that a leaked cookie is worthless — and an `x-auth-actor: agent`
+claim so the audit trail distinguishes them from human sign-ins.
+
+**Consequences.** Access to a test session is exactly access to the SSM
+parameter, which is already governed by IAM. Revocation is a key rotation, which
+invalidates every human session too — acceptable, because re-authenticating is
+one redirect.
+
+> **Lens.** Test credentials are *derived from* IAM-governed material at use
+> time, never stored. If a testing path needs a secret checked in anywhere, the
+> design is wrong.
+
+---
+
+## ADR-0012 — Hot data lives in DynamoDB, cold data becomes Parquet on S3
+
+**Status:** Accepted
+
+**Context.** Observations accumulate forever, but only the current block and a
+trailing window are ever read interactively. Charts over years of history are
+analytical scans, which is the one access pattern DynamoDB prices worst.
+
+**Decision.** DynamoDB holds a rolling **13-month** hot window. A scheduled
+age-out Lambda writes older items to
+`s3://fit-{env}-archive/{table}/year=YYYY/month=MM/*.parquet`, registers them in
+Glue, and only then deletes the DynamoDB items. The API reads DynamoDB for the
+hot window and Athena for anything older, transparently.
+
+13 months, not 12: it guarantees a full year-on-year comparison is always
+answerable from the hot path alone.
+
+**Consequences.** Delete-after-verify ordering means the failure mode is
+duplicate data (recoverable, dedup on read by sort key) rather than data loss.
+Config tables are never aged out — they are small and always hot.
+
+> **Lens.** Age-out is copy → verify → delete, in that order, always. Any table
+> holding time-series observations gets an age-out path; any table holding
+> configuration does not.
+
+---
+
+## ADR-0013 — Observations are append-only and never rewritten by the program
+
+**Status:** Accepted
+
+**Context.** The block-to-block recursion (Week 6 projected max seeds the next
+block's 1RMs) is tempting to implement as an in-place update of the athlete's
+current 1RM.
+
+**Decision.** A new block is a **new item** with its own `blockId` and its own
+seed 1RMs, carrying `derivedFrom` pointing at the previous block. Logged sets
+are immutable once written; a correction is a new item that supersedes by
+timestamp, not an overwrite.
+
+**Consequences.** The whole training history is reconstructible, and "what did I
+believe my max was in March" is answerable. The Week 6 projection
+(`week5_weight × 1.03 / 1.06 / 1.09` for 2 / 3 / 4 reps) is recorded as a
+*proposal* the user accepts, so an unaccepted projection never silently changes
+next block's prescription.
+
+> **Lens.** Never `UpdateItem` a fact about the past. New facts are new items.
+
+---
+
+## ADR-0014 — Every resource carries Project and Environment cost-allocation tags
+
+**Status:** Accepted
+
+**Context.** With three environments in one account (ADR-0002), the tag is the
+*only* thing that attributes a dollar to an environment. An untagged resource is
+permanently unattributable — Cost Explorer cannot retroactively tag history.
+
+**Decision.** Every Terraform provider carries `default_tags` with `Project =
+"fit"`, `Environment = <env>`, `ManagedBy = "terraform"`, and `Stack = <stack>`.
+Both `Project` and `Environment` are activated as cost-allocation tags. The
+CloudFormation bootstrap tags its own stacks equivalently with `ManagedBy =
+"bootstrap"`.
+
+Resources that AWS does not propagate `default_tags` to (CloudFront's edge
+replicas, some Lambda@Edge artefacts) are tagged explicitly at the resource.
+
+**Consequences.** The FinOps stack (ADR-0015) can group by environment without
+any account boundary. Tag activation is retroactive-blind, so it is part of
+bootstrap and must happen before the first spend.
+
+> **Lens.** A resource without `Project` and `Environment` is a bug, not a
+> style issue. Adding a provider block means adding `default_tags`.
+
+---
+
+## ADR-0015 — FinOps is one environment-agnostic stack, readable from every environment
+
+**Status:** Accepted
+
+**Context.** Cost data is account-scoped: one Cost and Usage Report covers all
+three environments. Deploying a copy per environment would create three CUR
+exports of the same data and triple the storage.
+
+**Decision.** `finops` is a single global stack — one CUR 2.0 export, one S3
+bucket, one Glue database, one Athena workgroup. It deploys on **merge to
+`main`** only (not on tags, not on PRs), because it has no environment to
+promote through.
+
+Every environment's API is granted read access to the same Athena workgroup and
+results prefix, so the FinOps page renders identical data from dev, test or
+prod, filterable by the `Environment` tag.
+
+**Consequences.** A FinOps change is verified in `test` and is simultaneously
+live in prod — accepted deliberately, because the stack is read-only reporting
+over data it does not own. The FinOps *page* still ships through the normal
+promotion path, since it is application code.
+
+> **Lens.** Data that is account-scoped gets one stack, not one per environment.
+> Its consumers get read grants, not copies.
+
+---
+
+## ADR-0016 — Local development runs the real handlers against emulated AWS
+
+**Status:** Accepted
+
+**Context.** A local mode that stubs the API is a second implementation that
+drifts. The point of a local loop is to catch bugs that would otherwise only
+appear in dev.
+
+**Decision.** `make dev` starts DynamoDB Local in Docker, seeds the tables with
+the same Terraform-described schema, and runs the **same** handler modules the
+Lambda entry point wraps — behind a thin local HTTP server rather than a
+Function URL. The SPA runs on Vite with a proxy to it.
+
+Auth locally is the same HMAC verification as production; `make token ENV=local`
+mints against a fixed development key. There is no `if (isLocal) skipAuth`
+branch anywhere in the request path.
+
+**Consequences.** The only untested-locally surfaces are CloudFront behaviours
+and the Lambda@Edge function itself, which is why the edge auth module carries
+its own unit tests and the e2e suite runs against deployed environments too.
+
+> **Lens.** Local differs from deployed in *transport and backing store only*.
+> A conditional that changes business or auth logic based on environment is a
+> defect.
+
+---
+
+## ADR-0017 — Sydney for data, us-east-1 only where AWS forces it
+
+**Status:** Accepted
+
+**Decision.** `ap-southeast-2` for everything with a choice. `us-east-1` for
+exactly three things AWS gives no choice about: the ACM certificate that
+CloudFront consumes, the Lambda@Edge function, and the Cost and Usage Report
+definition.
+
+**Consequences.** Stacks that touch the edge declare a second aliased provider
+`aws.us_east_1`. Lambda@Edge has no environment variables, so its configuration
+is **synthesized into the deployment bundle** as `config.json` at plan time —
+that file does not exist on disk, and looking for it in the source tree is a
+known dead end.
+
+> **Lens.** `us-east-1` appears only for cert, edge function, and CUR. Any other
+> us-east-1 resource needs justification.
+
+---
+
+## ADR-0018 — Single-tenant, single-user by construction
+
+**Status:** Accepted
+
+**Context.** Building multi-user tenancy speculatively costs a partition-key
+design, an authorization layer, and per-user data isolation tests for a user
+base of one.
+
+**Decision.** The data model is keyed by `userId` from day one — the partition
+key is `USER#{email}` — but there is exactly one admitted email, enforced at the
+edge (ADR-0010). No sharing, no roles, no invitations, no per-user settings UI.
+
+**Consequences.** Multi-user is a later *policy* change (widen the allow-list)
+plus an authorization layer, not a data migration. The key design does not have
+to be revisited.
+
+> **Lens.** Key by user, admit one user. Do not build sharing, roles, or
+> invitations until a second real user exists.
+
+---
+
+## ADR-0019 — TypeScript everywhere in the request path, Python only for analytics
+
+**Status:** Accepted
+
+**Context.** The program engine (ADR-0001) must run identically in the browser
+(instant re-projection as a 1RM is edited) and on the server (authoritative
+prescription). Two implementations of `MROUND` rounding would drift, and the
+drift would be silent — a 2.5kg discrepancy looks like a typo, not a bug.
+
+**Decision.** One TypeScript package, `packages/program`, imported by both the
+SPA and the API handler. Bun is the runtime and package manager. Python appears
+only where it is genuinely better and never in the request path: the Parquet
+age-out job (ADR-0012) and analysis helpers.
+
+**Consequences.** The engine's golden tests run once and cover both consumers.
+The archive Lambda is the sole Python runtime in the platform.
+
+> **Lens.** If browser and server must agree on a computation, there is exactly
+> one implementation of it, in TypeScript, in `packages/program`.
+
+---
+
+## ADR-0020 — Questions are queued, never blocking
+
+**Status:** Accepted
+
+**Context.** A first version of a personal application stalls on clarification
+round-trips far more often than it fails on a wrong assumption — and a wrong
+assumption in a single-user app is cheap to reverse.
+
+**Decision.** An ambiguity is resolved by (1) checking the Lenses above, and
+only if no Lens covers it, (2) recording it as
+`docs/questions/Q{NN}-{stub}.md`, stating the assumption taken, and continuing.
+Each question file carries the decision made in the interim, so the queue is a
+list of *reversible commitments*, not a list of blockers.
+
+**Consequences.** Every question in the queue is answerable later without
+rework, or the assumption would have been a blocker instead.
+
+> **Lens.** Never stop to ask. Decide, record the assumption, continue.

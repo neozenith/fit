@@ -1,0 +1,190 @@
+{
+  "defaultTheme": "dark",
+  "waivers": {
+    "seriesContrast": "Ghibli Pastel L0.80/C0.11 is a defining stylistic identity of OsakaNights and is used identically in Day and Night. Categorical marks are always legended (colour-never-alone) and clear CVD adjacency (worst ΔE 9.3), so the sub-3:1 mark contrast on the light plot surface is an accepted, deliberate trade for this theme. Do not darken the palette or the chart bed to satisfy the gate."
+  },
+  "fonts": {
+    "display": "'Fraunces', Georgia, serif",
+    "body": "'Fira Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    "mono": "'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+  },
+  "themes": {
+    "light": {
+      "bg": "#faf8f9",
+      "fg": "#1c1a20",
+      "muted": "#57525e",
+      "accent": "#5c4295",
+      "surface": "#ffffff",
+      "border": "#d6ccd2",
+      "onAccent": "#ffffff",
+      "link": "#5c4295",
+      "radius": "12px",
+      "pill": "999px"
+    },
+    "dark": {
+      "bg": "#101010",
+      "fg": "#dddddd",
+      "muted": "#adadad",
+      "accent": "#c3b0fd",
+      "surface": "#1a1a1c",
+      "border": "#3d3d3d",
+      "onAccent": "#101010",
+      "link": "#c3b0fd",
+      "radius": "12px",
+      "pill": "999px"
+    }
+  },
+  "canvas": {
+    "cytoscape": {
+      "light": {
+        "nodeFill": "#f0ecfa",
+        "nodeBorder": "#5c4295",
+        "nodeLabel": "#1c1a20",
+        "nodeFillAlt": "#e6f1f6",
+        "edge": "#847e8c",
+        "edgeLabel": "#57525e",
+        "edgeLabelBg": "#faf8f9",
+        "compoundBg": "#f2eef0",
+        "compoundBorder": "#c9bcf0",
+        "selected": "#6515c1",
+        "shape": "round-rectangle",
+        "roundness": 8
+      },
+      "dark": {
+        "nodeFill": "#211b30",
+        "nodeBorder": "#c3b0fd",
+        "nodeLabel": "#dddddd",
+        "nodeFillAlt": "#07232f",
+        "edge": "#858585",
+        "edgeLabel": "#adadad",
+        "edgeLabelBg": "#101010",
+        "compoundBg": "#1a1a1c",
+        "compoundBorder": "#323232",
+        "selected": "#cc66ff",
+        "shape": "round-rectangle",
+        "roundness": 8
+      }
+    },
+    "plotly": {
+      "light": {
+        "paper": "#ffffff",
+        "plot": "#faf8f9",
+        "font": "#1c1a20",
+        "grid": "#e9e4e8",
+        "series": [
+          "#c3affd",
+          "#e9b26a",
+          "#58d1e5",
+          "#f2a0cb",
+          "#adca7b",
+          "#9bbeff",
+          "#fba587",
+          "#63d5bd"
+        ],
+        "seriesAlt": [
+          "#6977f0",
+          "#dd5139",
+          "#049e74",
+          "#9d65dd",
+          "#c96900",
+          "#0796ae",
+          "#d94b78",
+          "#649803"
+        ],
+        "muted": ["#868686", "#9e9e9e", "#b1b1b1", "#c4c4c4"],
+        "sequential": ["#ede8fb", "#c9bcf0", "#9d8ad8", "#7259b4", "#4b3585"],
+        "diverging": {
+          "good": ["#a89bd3", "#8973c3", "#6b4cae"],
+          "zero": "#e8e4e6",
+          "bad": ["#d4918b", "#c1645e", "#a83634"],
+          "label": "violet \u2194 red"
+        },
+        "divergingAlt": {
+          "good": ["#60b5b5", "#019696", "#067272"],
+          "zero": "#e8e4e6",
+          "bad": ["#d4918b", "#c1645e", "#a83634"],
+          "label": "teal \u2194 red (green semantics)"
+        }
+      },
+      "dark": {
+        "paper": "#101010",
+        "plot": "#151517",
+        "font": "#dddddd",
+        "grid": "#2a2a2e",
+        "series": [
+          "#c3affd",
+          "#e9b26a",
+          "#58d1e5",
+          "#f2a0cb",
+          "#adca7b",
+          "#9bbeff",
+          "#fba587",
+          "#63d5bd"
+        ],
+        "seriesAlt": [
+          "#7180fe",
+          "#ec563d",
+          "#06a87c",
+          "#a86bec",
+          "#d57004",
+          "#02a0b9",
+          "#e85080",
+          "#6ba304"
+        ],
+        "muted": ["#7a7a7a", "#636363", "#505050", "#404040"],
+        "sequential": ["#ddd4fe", "#c3b0fd", "#a48bf2", "#8266d9", "#5f45ad"],
+        "diverging": {
+          "good": ["#c1b3f1", "#a890e9", "#8f6edb"],
+          "zero": "#3a3a3a",
+          "bad": ["#f1a8a1", "#e68078", "#d55753"],
+          "label": "violet \u2194 red"
+        },
+        "divergingAlt": {
+          "good": ["#74d0cf", "#0ab8b9", "#009a9a"],
+          "zero": "#3a3a3a",
+          "bad": ["#f1a8a1", "#e68078", "#d55753"],
+          "label": "teal \u2194 red (green semantics)"
+        }
+      }
+    }
+  },
+  "categoryColours": {
+    "Compute": "#a86bec",
+    "Storage": "#06a87c",
+    "Database": "#e85080",
+    "Networking": "#02a0b9",
+    "Security": "#d57004",
+    "Integration": "#7180fe",
+    "General": "#858585"
+  },
+  "status": {
+    "light": {
+      "colours": {
+        "good": "#00672d",
+        "warning": "#734c02",
+        "serious": "#8c3701",
+        "critical": "#932a30"
+      },
+      "labels": {
+        "good": "Open Sign",
+        "warning": "Last Train",
+        "serious": "Last Orders",
+        "critical": "Shutters Down"
+      }
+    },
+    "dark": {
+      "colours": {
+        "good": "#83d494",
+        "warning": "#ebb25f",
+        "serious": "#fea47c",
+        "critical": "#ffa09c"
+      },
+      "labels": {
+        "good": "Open Sign",
+        "warning": "Last Train",
+        "serious": "Last Orders",
+        "critical": "Shutters Down"
+      }
+    }
+  }
+}

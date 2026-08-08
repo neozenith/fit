@@ -1,0 +1,17 @@
+# API stack configuration.
+#
+# The FinOps identifiers are GLOBAL and identical in every environment: cost
+# data is account-scoped, so every environment reads the same tables and
+# filters them by the Environment tag (ADR-0015).
+
+app_name: fit
+region: ap-southeast-2
+
+finops:
+  glue_database: fit_finops
+  athena_workgroup: fit-finops
+
+environments:
+  dev: {}
+  test: {}
+  prod: {}

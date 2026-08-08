@@ -1,0 +1,23 @@
+# Archive stack configuration.
+#
+# The pyarrow layer is a third-party public layer. It is PINNED to an exact
+# version on purpose: a floating `:latest` would silently change the Parquet
+# writer under a job whose entire value proposition is that it does not lose
+# data. Bump it deliberately, and read the release notes when you do.
+#
+# Source: https://github.com/aws/aws-sdk-pandas (AWS SDK for pandas managed layer)
+
+app_name: fit
+region: ap-southeast-2
+
+pyarrow_layer_arn: "arn:aws:lambda:ap-southeast-2:336392948345:layer:AWSSDKPandas-Python313-Arm64:5"
+
+environments:
+  dev:
+    # A one-month window in dev exercises the age-out continuously instead of
+    # once a year, which is the only way its bugs are found before they matter.
+    hot_window_months: 1
+  test:
+    hot_window_months: 13
+  prod:
+    hot_window_months: 13

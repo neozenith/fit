@@ -1,0 +1,410 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  /* An explicit background is load-bearing, not cosmetic: a transparent body
+     borrows whatever the host paints behind it, which in a dark browser with a
+     light theme selection produces unreadable text. */
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0 0 var(--s3);
+}
+
+h1 {
+  font-size: 1.65rem;
+}
+h2 {
+  font-size: 1.25rem;
+}
+h3 {
+  font-size: 1rem;
+}
+
+a {
+  color: var(--link);
+}
+
+/* --- Layout ---------------------------------------------------------------- */
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+/* Grid and flex items default to `min-width: auto`, which refuses to shrink
+   below their content. Every wrapping and scrolling rule further down this file
+   is therefore inert without this: the header simply grew to 505px inside a
+   390px viewport and dragged the whole page sideways with it. It has to be
+   declared at EVERY level of the nesting, not just the innermost one. */
+.shell > * {
+  min-width: 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) var(--s5);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: -0.01em;
+  margin-right: var(--s2);
+}
+
+.nav {
+  display: flex;
+  gap: var(--s1);
+  flex-wrap: wrap;
+  /* `min-width: 0` is load-bearing. A flex item defaults to `min-width: auto`,
+     which refuses to shrink below its content — so this nav stayed 400px wide
+     inside a 390px viewport and its OWN `flex-wrap` never got the chance to
+     engage. The result was 115px of horizontal page scroll on every phone. */
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.nav button {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.nav button:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.nav button[aria-current="page"] {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.spacer {
+  margin-left: auto;
+}
+
+main {
+  padding: var(--s5);
+  max-width: 76rem;
+  width: 100%;
+  margin: 0 auto;
+}
+
+footer {
+  padding: var(--s4) var(--s5);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* --- Surfaces -------------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s4);
+  margin-bottom: var(--s4);
+}
+
+.card > h2:first-child,
+.card > h3:first-child {
+  margin-top: 0;
+}
+
+.grid {
+  display: grid;
+  gap: var(--s4);
+  grid-template-columns: repeat(auto-fill, minmax(min(22rem, 100%), 1fr));
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem var(--s3);
+  border-radius: var(--pill);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pill--accent {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Tables ---------------------------------------------------------------- */
+
+/* Wide content scrolls inside its own container so the PAGE never scrolls
+   horizontally — on a phone a wide table otherwise drags the whole layout. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+td.num,
+th.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* --- Forms ----------------------------------------------------------------- */
+
+label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: var(--s1);
+}
+
+input,
+select {
+  font: inherit;
+  width: 100%;
+  padding: var(--s2) var(--s3);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.field {
+  margin-bottom: var(--s3);
+}
+
+.row {
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.row > * {
+  flex: 1 1 8rem;
+}
+
+button.primary {
+  font: inherit;
+  padding: var(--s2) var(--s5);
+  border-radius: var(--pill);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+button.ghost {
+  font: inherit;
+  padding: var(--s2) var(--s4);
+  border-radius: var(--pill);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Status ---------------------------------------------------------------- */
+
+.status-good {
+  color: var(--status-good);
+}
+.status-warning {
+  color: var(--status-warning);
+}
+.status-critical {
+  color: var(--status-critical);
+}
+
+.banner {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--status-warning);
+  border-radius: var(--radius);
+  padding: var(--s3) var(--s4);
+  margin-bottom: var(--s4);
+  background: var(--surface);
+}
+
+.banner--error {
+  border-left-color: var(--status-critical);
+}
+
+/* --- Session view ---------------------------------------------------------- */
+
+.session-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s3);
+}
+
+.sets {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.set {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--s1) var(--s3);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.set--measure {
+  /* The max-reps sets are where the program listens back; they must not look
+     like the other sets. */
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.exercise {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) 1fr;
+  gap: var(--s3);
+  align-items: baseline;
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.exercise:last-child {
+  border-bottom: none;
+}
+
+@media (max-width: 40rem) {
+  .exercise {
+    grid-template-columns: 1fr;
+    gap: var(--s1);
+  }
+  main {
+    padding: var(--s4) var(--s3);
+  }
+}
+
+/* --- Chart ----------------------------------------------------------------- */
+
+.chart {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.chart .grid-line {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.chart .axis-label {
+  fill: var(--muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.legend {
+  display: flex;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  margin-top: var(--s2);
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 3px;
+  display: inline-block;
+}

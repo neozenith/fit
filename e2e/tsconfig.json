@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // DOM is needed even though this is a Node process: `page.evaluate`
+    // callbacks are type-checked as browser code, because that is where they
+    // actually run.
+    "lib": ["ES2023", "DOM"],
+    // Both: the test harness runs on Node, but screenshots.ts is a Bun script.
+    "types": ["node", "bun"],
+    "noEmit": true,
+    // Playwright's config type does not model `workers: undefined`, which is
+    // the documented way to say "use the default". Relaxing this one flag for
+    // the harness beats a branch that sets the key only when it has a value.
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["**/*.ts"]
+}

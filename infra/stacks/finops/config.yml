@@ -1,0 +1,9 @@
+# FinOps stack configuration.
+#
+# There is no `environments:` block, deliberately. Cost data is account-scoped,
+# so this stack has exactly one deployment and no promotion path (ADR-0015) —
+# it applies on merge to main and is simultaneously live for every environment.
+
+app_name: fit
+region: ap-southeast-2
+athena_scan_limit_bytes: 10737418240

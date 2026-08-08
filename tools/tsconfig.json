@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["bun"],
+    "noEmit": true,
+    "paths": { "@fit/program": ["../packages/program/src/index.ts"] }
+  },
+  "include": ["*.ts"]
+}

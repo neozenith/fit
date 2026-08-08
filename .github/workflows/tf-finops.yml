@@ -1,0 +1,95 @@
+name: TF finops
+
+# The FinOps stack does NOT use the shared per-stack workflow, and that is the
+# point of it being separate.
+#
+# Every other stack promotes dev -> test -> prod on a Git event (ADR-0007). This
+# one has no environment to promote through: cost data is account-scoped, so
+# there is exactly one deployment (ADR-0015). Routing it through the shared
+# workflow would produce three applies of the same global resources, racing each
+# other for one state key.
+#
+# So: plan on every pull request, apply on merge to main. Tags do nothing here.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    paths:
+      - infra/stacks/finops/**
+      - infra/modules/finops/**
+      - .github/workflows/tf-finops.yml
+  push:
+    branches: [main]
+    paths:
+      - infra/stacks/finops/**
+      - infra/modules/finops/**
+      - .github/workflows/tf-finops.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Not keyed on ref. There is ONE state key, so two branches planning at once
+  # would contend for the same lock rather than proceeding independently.
+  group: tf-finops
+  cancel-in-progress: false
+
+jobs:
+  finops:
+    runs-on: ubuntu-latest
+    # `test` rather than `prod`: the binding exists to gate WHO can deploy, and
+    # test's gate (main only) is exactly the rule this stack follows. Binding
+    # prod would demand a v* tag that never comes.
+    environment: ${{ github.event_name == 'push' && 'test' || '' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.5"
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-finops-${{ github.run_id }}
+
+      - name: init
+        run: |
+          terraform -chdir=infra/stacks/finops init \
+            -backend-config=backends/global.config -input=false -reconfigure
+
+      - name: plan
+        run: |
+          terraform -chdir=infra/stacks/finops plan \
+            -input=false -lock-timeout=5m -out=tfplan -detailed-exitcode || code=$?
+          if [ "${code:-0}" = "1" ]; then exit 1; fi
+
+      - name: summarise
+        run: |
+          {
+            echo "### \`finops\` (global)"
+            echo
+            echo '```'
+            terraform -chdir=infra/stacks/finops show -no-color tfplan | tail -c 60000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          terraform -chdir=infra/stacks/finops apply \
+            -input=false -lock-timeout=5m -auto-approve tfplan
+
+      - name: Crawl the export
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        # The scheduled crawl runs at 03:00. Kicking it here means a freshly
+        # applied stack has a queryable table within minutes rather than
+        # tomorrow — and a page that reports "no data" for a day looks broken
+        # in a way that is indistinguishable from actually being broken.
+        run: |
+          CRAWLER=$(terraform -chdir=infra/stacks/finops output -raw crawler_name)
+          # A crawler already running is not an error; it is the desired state.
+          aws glue start-crawler --name "$CRAWLER" \
+            || echo "crawler is already running — nothing to do"

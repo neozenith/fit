@@ -1,0 +1,126 @@
+/**
+ * Design tokens, derived from the OsakaNights theme.
+ *
+ * The token JSON (`design-tokens.json`) is the source of truth and is kept
+ * alongside this file so a theme change is a data change. The CSS below is the
+ * hand-maintained projection of it onto custom properties, because a build step
+ * that generated CSS from JSON would buy nothing at this size and cost a
+ * plugin.
+ *
+ * THEME RESOLUTION — three states, not two:
+ *   1. an explicit choice stamps `data-theme` on the root,
+ *   2. the default "system" setting stamps nothing, so only
+ *      `prefers-color-scheme` separates light from dark,
+ *   3. therefore every colour gets its definition on bare `:root` first, and
+ *      the dark blocks only REDEFINE.
+ * A colour whose only definition lives inside a media query has no value at all
+ * in the third state.
+ */
+
+:root {
+  /* Type */
+  --font-display: "Fraunces", Georgia, serif;
+  --font-body: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Light palette — the complete set, defined unconditionally. */
+  --bg: #faf8f9;
+  --fg: #1c1a20;
+  --muted: #57525e;
+  --accent: #5c4295;
+  --surface: #ffffff;
+  --border: #d6ccd2;
+  --on-accent: #ffffff;
+  --link: #5c4295;
+
+  --radius: 12px;
+  --pill: 999px;
+
+  /* Status. The labels are part of the theme's identity and appear in the UI. */
+  --status-good: #00672d;
+  --status-warning: #734c02;
+  --status-serious: #8c3701;
+  --status-critical: #932a30;
+
+  /* Categorical series, for the progress and cost charts. */
+  --series-1: #6977f0;
+  --series-2: #dd5139;
+  --series-3: #049e74;
+  --series-4: #9d65dd;
+  --series-5: #c96900;
+  --series-6: #0796ae;
+  --series-7: #d94b78;
+  --series-8: #649803;
+
+  --chart-grid: #e9e4e8;
+  --chart-plot: #faf8f9;
+
+  /* Spacing scale. A geometric-ish ramp so nesting stays visually distinct. */
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --s7: 3rem;
+}
+
+/* System preference, only when no explicit choice was stamped. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101010;
+    --fg: #dddddd;
+    --muted: #adadad;
+    --accent: #c3b0fd;
+    --surface: #1a1a1c;
+    --border: #3d3d3d;
+    --on-accent: #101010;
+    --link: #c3b0fd;
+
+    --status-good: #83d494;
+    --status-warning: #ebb25f;
+    --status-serious: #fea47c;
+    --status-critical: #ffa09c;
+
+    --series-1: #7180fe;
+    --series-2: #ec563d;
+    --series-3: #06a87c;
+    --series-4: #a86bec;
+    --series-5: #d57004;
+    --series-6: #02a0b9;
+    --series-7: #e85080;
+    --series-8: #6ba304;
+
+    --chart-grid: #2a2a2e;
+    --chart-plot: #151517;
+  }
+}
+
+/* Explicit dark, which must win over an explicit light preference too. */
+:root[data-theme="dark"] {
+  --bg: #101010;
+  --fg: #dddddd;
+  --muted: #adadad;
+  --accent: #c3b0fd;
+  --surface: #1a1a1c;
+  --border: #3d3d3d;
+  --on-accent: #101010;
+  --link: #c3b0fd;
+
+  --status-good: #83d494;
+  --status-warning: #ebb25f;
+  --status-serious: #fea47c;
+  --status-critical: #ffa09c;
+
+  --series-1: #7180fe;
+  --series-2: #ec563d;
+  --series-3: #06a87c;
+  --series-4: #a86bec;
+  --series-5: #d57004;
+  --series-6: #02a0b9;
+  --series-7: #e85080;
+  --series-8: #6ba304;
+
+  --chart-grid: #2a2a2e;
+  --chart-plot: #151517;
+}

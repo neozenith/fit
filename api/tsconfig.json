@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["bun"],
+    // No rootDir: `api` imports @fit/program from a sibling workspace, and a
+    // rootDir of `.` would reject every one of those imports as "not under
+    // rootDir". Type-checking is the only thing tsc does here — the bundle is
+    // built by bun — so there is no emit layout to constrain.
+    "noEmit": true,
+    "paths": { "@fit/program": ["../packages/program/src/index.ts"] }
+  },
+  "include": ["src/**/*.ts"]
+}

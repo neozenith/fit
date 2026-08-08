@@ -1,0 +1,43 @@
+name: TF api
+
+# Per-stack caller. It owns ONLY its path filters; the routing lives in
+# terraform-stack.yml so the promotion rules are stated once (ADR-0007).
+#
+# The filters are enumerated rather than wildcarded so a change to one stack
+# does not queue behind another stack's plan. That only stays correct if the
+# module list below matches what infra/stacks/api/main.tf actually calls.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    paths:
+      - infra/stacks/api/**
+      - infra/modules/api/**
+      - api/**
+      - packages/program/**
+      - .github/workflows/tf-api.yml
+      - .github/workflows/terraform-stack.yml
+      - .github/actions/terraform/**
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - infra/stacks/api/**
+      - infra/modules/api/**
+      - api/**
+      - packages/program/**
+      - .github/workflows/tf-api.yml
+      - .github/workflows/terraform-stack.yml
+      - .github/actions/terraform/**
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  stack:
+    uses: ./.github/workflows/terraform-stack.yml
+    with:
+      stack: api
+      needs_app_bundle: true

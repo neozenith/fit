@@ -1,3 +1,44 @@
+# Personal source data — the spreadsheet this app replaces carries body metrics.
 reference/
+
+# Project-local scratch (never system /tmp — see CLAUDE.md)
 tmp/
+
+# OS
 .DS_Store
+
+# Node / Bun
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Lambda build artefacts (synthesized at plan time)
+infra/modules/**/.build/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+.playwright-cli/
+e2e/.auth/
+
+# Local env
+.env
+.env.local

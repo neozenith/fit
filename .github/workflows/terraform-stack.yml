@@ -1,0 +1,203 @@
+name: TF Stack
+
+# Reusable workflow — the SINGLE home for Terraform routing. Every per-stack
+# caller forwards its stack name; this workflow decides which environment each
+# Git event applies to (ADR-0007).
+#
+#   draft PR                    -> ci, then `plan` across dev/test/prod. No apply.
+#   ready-for-review PR         -> ci, plan, then `apply / dev`
+#   push to main                -> ci, plan, then `apply / test`
+#   push of a v* tag            -> ci, plan, then `apply / prod`
+#
+# Three safety properties, each deliberate:
+#
+#   1. `ci` runs first on EVERY trigger and needs no cloud credentials. Every
+#      plan and apply job `needs: ci`, so a formatting or validation failure
+#      stops the run before any AWS authentication happens.
+#
+#   2. All THREE environments plan on every trigger, so a draft PR is a genuine
+#      zero-risk "what would this do everywhere" report. Each apply needs its
+#      OWN plan — `apply / dev` waits on `plan / dev` and nothing else — so an
+#      environment that has not been stood up yet cannot block a deploy to one
+#      that has. See the note above the plan jobs.
+#
+#   3. `plan` deliberately binds NO GitHub Environment. prod is gated to v* tags,
+#      so a `plan / prod` job on a PR branch would be rejected by that very gate.
+#      Plans take the deployer role from the repo-level variable instead; only
+#      APPLY jobs bind `environment:`, which is what makes the promotion gates
+#      constrain exactly where state is mutated and nowhere else.
+
+on:
+  workflow_call:
+    inputs:
+      stack:
+        description: Stack directory name under infra/stacks/.
+        required: true
+        type: string
+      needs_app_bundle:
+        description: >-
+          Build the API bundle before planning. Only the `api` stack needs it —
+          its archive_file zips a directory that does not exist until the build
+          runs, and a plan without it fails on a missing path rather than on
+          anything to do with infrastructure.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write # required for OIDC federation to AWS
+  pull-requests: write
+
+concurrency:
+  # Keyed on stack AND ref: two stacks deploy in parallel because they hold
+  # different state keys (ADR-0005), and two branches of the same stack do not
+  # queue behind each other for a plan.
+  group: tf-${{ inputs.stack }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: "1.14.5"
+
+jobs:
+  ci:
+    name: ci (fmt-check + validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: stacks contain no resource blocks
+        # The invariant that keeps modules owning resources and stacks owning
+        # wiring. Checked here rather than in review because it is mechanical,
+        # and a reviewer will miss it exactly once.
+        run: |
+          if grep -rn '^resource' infra/stacks/; then
+            echo "::error::infra/stacks/ must contain no resource blocks — move them into a module."
+            exit 1
+          fi
+
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive infra
+
+      - name: terraform validate
+        run: |
+          terraform -chdir=infra/stacks/${{ inputs.stack }} init -backend=false -input=false
+          terraform -chdir=infra/stacks/${{ inputs.stack }} validate
+
+  # THREE SEPARATE PLAN JOBS, not a matrix — and the verbosity buys something
+  # specific.
+  #
+  # `needs:` cannot reference one cell of a matrix, only the whole job. So with
+  # a matrix, `apply / dev` waits on all three cells and is SKIPPED if any of
+  # them fails. That is wrong in the case that actually happens: an environment
+  # that has not been stood up yet fails its plan for reasons having nothing to
+  # do with the change, and takes a perfectly good dev deploy down with it.
+  #
+  # Split, each apply depends on exactly its own plan. A red `plan / prod` on an
+  # empty prod no longer blocks dev, and the blast-radius report ADR-0007 wants
+  # is unchanged — all three still plan on every trigger.
+
+  plan-dev:
+    name: plan / dev
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/terraform
+        with:
+          env: dev
+          stack: ${{ inputs.stack }}
+          action: plan
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: ${{ inputs.needs_app_bundle }}
+
+  plan-test:
+    name: plan / test
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/terraform
+        with:
+          env: test
+          stack: ${{ inputs.stack }}
+          action: plan
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: ${{ inputs.needs_app_bundle }}
+
+  plan-prod:
+    name: plan / prod
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/terraform
+        with:
+          env: prod
+          stack: ${{ inputs.stack }}
+          action: plan
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: ${{ inputs.needs_app_bundle }}
+
+  apply-dev:
+    name: apply / dev
+    needs: [ci, plan-dev]
+    # A DRAFT pull request never reaches here — marking it ready for review is
+    # the act that first mutates cloud state, and it mutates dev only.
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/terraform
+        with:
+          env: dev
+          stack: ${{ inputs.stack }}
+          action: apply
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: ${{ inputs.needs_app_bundle }}
+
+  apply-test:
+    name: apply / test
+    needs: [ci, plan-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/terraform
+        with:
+          env: test
+          stack: ${{ inputs.stack }}
+          action: apply
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: ${{ inputs.needs_app_bundle }}
+
+  apply-prod:
+    name: apply / prod
+    needs: [ci, plan-prod]
+    # The prod GitHub Environment restricts deployments to v* tags on top of
+    # this condition, so the gate is enforced twice — once here where it is
+    # readable, once there where it cannot be edited in a pull request.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/terraform
+        with:
+          env: prod
+          stack: ${{ inputs.stack }}
+          action: apply
+          aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+          aws_region: ${{ vars.AWS_REGION }}
+          build_app: ${{ inputs.needs_app_bundle }}

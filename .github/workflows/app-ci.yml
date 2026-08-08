@@ -1,0 +1,128 @@
+name: App CI
+
+# The free, offline, deterministic gate. No cloud credentials, no money spent,
+# no state touched — exactly the same thing `make ci` runs locally, so a green
+# local run means a green CI run.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache the bun install store
+        # setup-bun has no built-in `cache:` parameter, unlike setup-node, so
+        # this is wired explicitly. Keyed on the LOCKFILE, never package.json:
+        # a manifest can change without changing a single installed byte, and
+        # can stay identical while a transitive dependency drifts.
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install
+        # `--frozen-lockfile` so a dependency cannot drift between a developer's
+        # machine and CI without the lockfile change being visible in the diff.
+        run: bun install --frozen-lockfile
+
+      - name: Format and lint
+        run: bunx --bun @biomejs/biome check .
+
+      - name: Typecheck
+        run: |
+          bun run --cwd packages/program typecheck
+          bun run --cwd api typecheck
+          bun run --cwd frontend typecheck
+          bun run --cwd tools typecheck
+          bun run --cwd e2e typecheck
+
+      - name: Unit tests
+        # Covers the program engine, the API's identity verification, and the
+        # edge authenticator's pure helpers. No network, no AWS, no LLM.
+        run: bun test packages api infra
+
+      - name: Build
+        run: |
+          bun run --cwd api build
+          bun run --cwd frontend build
+
+  e2e-local:
+    name: e2e (local stack)
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Start DynamoDB Local
+        run: |
+          docker compose up -d
+          # Poll rather than sleep: the container answers 400 to an unsigned
+          # request as soon as it is listening, and a fixed sleep is either
+          # wasteful or flaky depending on the runner's mood.
+          for _ in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:8000; then break; fi
+            sleep 1
+          done
+
+      - name: Seed
+        run: bun run tools/seed.ts
+
+      - name: Cache the Playwright browser
+        id: pw-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browser
+        # Skipped entirely on an exact cache hit — the binary is ~130MB and the
+        # download dominates this job.
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        # Through the e2e workspace, not `bun x` from the root: playwright is a
+        # dependency of e2e alone, so a root invocation resolves a DIFFERENT
+        # playwright than the one the tests import — it downloads a browser the
+        # suite then cannot find.
+        run: bun run --cwd e2e install-browser
+
+      - name: Run the app and the suite
+        run: |
+          bun run tools/dev.ts &
+          for _ in $(seq 1 40); do
+            if curl -s -o /dev/null http://localhost:5173; then break; fi
+            sleep 1
+          done
+          bun run tools/smoke.ts --env local
+          bun run --cwd e2e test -- --project=local
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7

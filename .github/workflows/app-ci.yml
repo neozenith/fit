@@ -80,7 +80,11 @@ jobs:
         run: bun run tools/seed.ts
 
       - name: Install Playwright browser
-        run: bun x playwright install --with-deps chromium
+        # Through the e2e workspace, not `bun x` from the root: playwright is a
+        # dependency of e2e alone, so a root invocation resolves a DIFFERENT
+        # playwright than the one the tests import — it downloads a browser the
+        # suite then cannot find.
+        run: bun run --cwd e2e install-browser
 
       - name: Run the app and the suite
         run: |

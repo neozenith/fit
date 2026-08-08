@@ -6,7 +6,8 @@
   "scripts": {
     "test": "playwright test",
     "report": "playwright show-report",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "install-browser": "playwright install --with-deps chromium"
   },
   "devDependencies": {
     "@aws-sdk/client-ssm": "3.907.0",

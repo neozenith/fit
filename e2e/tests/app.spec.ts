@@ -169,9 +169,9 @@ test.describe("cost", () => {
       .isVisible()
       .catch(() => false);
     // Three valid states, not two: a breakdown, "the stack is not deployed", or
-     // "the catalogue has no data yet". The third is the normal state for hours
-     // after a cold start, and omitting it made this test fail on a healthy
-     // environment.
+    // "the catalogue has no data yet". The third is the normal state for hours
+    // after a cold start, and omitting it made this test fail on a healthy
+    // environment.
     const explained = (await page.getByText(/has not been deployed|no data yet/i).count()) > 0;
 
     expect(hasBreakdown || explained).toBe(true);

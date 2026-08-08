@@ -80,9 +80,7 @@ const main = async (): Promise<void> => {
       : ((await ssmValue(`/fit/${env}/auth/allowed_users`, false)).split(",")[0] ?? "").trim();
 
   const exp = Math.floor(Date.now() / 1000) + 600;
-  const payload = b64url(
-    Buffer.from(JSON.stringify({ email, idp: "entra", actor: "agent", exp })),
-  );
+  const payload = b64url(Buffer.from(JSON.stringify({ email, idp: "entra", actor: "agent", exp })));
   const cookie = `__session=${payload}.${hmac(key, payload)}`;
 
   // Local has no edge, so the API is handed the headers directly; deployed

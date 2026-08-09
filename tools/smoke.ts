@@ -91,6 +91,7 @@ const CHECKS: Check[] = [
   // the S3 grant is broken, which is exactly what a smoke test is for.
   ...[
     "history",
+    "history/summary",
     "history/exercises",
     "history/volume",
     "history/rep-maxes",

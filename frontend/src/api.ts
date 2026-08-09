@@ -135,58 +135,45 @@ export const api = {
     }>(`/api/finops?${new URLSearchParams(params)}`),
 
   // --- Imported history ------------------------------------------------------
-  // Every one of these can answer `available: false` — the import is an
-  // operator action, so an environment can be entirely healthy and hold none.
+  // Both can answer `available: false` — the import is an operator action, so
+  // an environment can be entirely healthy and hold none.
 
-  historySummary: () =>
-    request<
-      | { available: false; reason: string }
-      | {
-          available: true;
-          from: string;
-          to: string;
-          sessions: number;
-          sets: number;
-          totalVolumeKg: number;
-          exercises: number;
-          activities: number;
-          weighIns: number;
-          weightFirstKg: number | null;
-          weightLatestKg: number | null;
-        }
-    >("/api/history"),
-
-  historyExercises: () =>
-    request<
-      { available: false; reason: string } | { available: true; exercises: HistoryExercise[] }
-    >("/api/history/exercises"),
+  // ONE request for every panel. Seven independent requests fanned out to as
+  // many cold Lambda containers on a scale-to-zero platform, each paying
+  // DuckDB's start-up separately; bundled, exactly one does.
+  history: () =>
+    request<{ available: false; reason: string } | ({ available: true } & HistoryBundle)>(
+      "/api/history",
+    ),
 
   historyVolume: (grain: "week" | "month", exercise?: string) =>
     request<
       | { available: false; reason: string }
       | { available: true; grain: string; points: HistoryVolumePoint[] }
     >(`/api/history/volume?${new URLSearchParams({ grain, ...(exercise ? { exercise } : {}) })}`),
-
-  historyRepMaxes: () =>
-    request<{ available: false; reason: string } | { available: true; repMaxes: HistoryRepMax[] }>(
-      "/api/history/rep-maxes",
-    ),
-
-  historyBodyweight: () =>
-    request<{ available: false; reason: string } | { available: true; points: HistoryBodyPoint[] }>(
-      "/api/history/bodyweight",
-    ),
-
-  historyCardio: () =>
-    request<{ available: false; reason: string } | { available: true; weeks: HistoryCardioWeek[] }>(
-      "/api/history/cardio",
-    ),
-
-  historyStreaks: () =>
-    request<{ available: false; reason: string } | { available: true; streaks: HistoryStreak[] }>(
-      "/api/history/streaks",
-    ),
 };
+
+export interface HistorySummary {
+  from: string;
+  to: string;
+  sessions: number;
+  sets: number;
+  totalVolumeKg: number;
+  exercises: number;
+  activities: number;
+  weighIns: number;
+  weightFirstKg: number | null;
+  weightLatestKg: number | null;
+}
+
+export interface HistoryBundle {
+  summary: HistorySummary;
+  exercises: HistoryExercise[];
+  repMaxes: HistoryRepMax[];
+  bodyweight: HistoryBodyPoint[];
+  cardio: HistoryCardioWeek[];
+  streaks: HistoryStreak[];
+}
 
 export interface HistoryExercise {
   exercise: string;

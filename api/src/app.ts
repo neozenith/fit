@@ -16,6 +16,7 @@ import { ENVIRONMENT } from "./const.js";
 import { queryFinops } from "./finops.js";
 import {
   bodyweight as historyBodyweight,
+  bundle as historyBundle,
   cardio as historyCardio,
   exercises as historyExercises,
   repMaxes as historyRepMaxes,
@@ -364,7 +365,14 @@ const ROUTES: Route[] = [
   // --- Imported history ------------------------------------------------------
   // Read-only, derived in SQL from the curated Parquet. No writes: the import
   // is an operator action (tools/publish-history.ts), never a request.
-  { method: "GET", pattern: /^\/api\/history$/, handle: async () => json(await historySummary()) },
+  // The bundle, not the summary: one response so a cold start is paid once
+  // rather than once per panel. `/api/history/summary` keeps the narrow shape.
+  { method: "GET", pattern: /^\/api\/history$/, handle: async () => json(await historyBundle()) },
+  {
+    method: "GET",
+    pattern: /^\/api\/history\/summary$/,
+    handle: async () => json(await historySummary()),
+  },
   {
     method: "GET",
     pattern: /^\/api\/history\/exercises$/,

@@ -491,3 +491,54 @@ export const streaks = async (
     })),
   };
 };
+
+export interface HistoryBundle {
+  available: true;
+  summary: HistorySummary;
+  exercises: ExerciseRow[];
+  repMaxes: RepMaxRow[];
+  bodyweight: BodyPoint[];
+  cardio: CardioWeek[];
+  streaks: StreakRow[];
+}
+
+/**
+ * Every panel in one response.
+ *
+ * The History page originally issued one request per dataset, on the reasoning
+ * that independent queries should not wait for each other. Measurement said
+ * otherwise. Warm, the seven calls return in ~400ms together — but this is a
+ * scale-to-zero platform (ADR-0003), so the FIRST load of the day is the common
+ * one, and seven concurrent requests fan out to as many as seven cold
+ * containers that each pay DuckDB's ~7s initialisation independently.
+ *
+ * Bundled, exactly one container pays it. The queries themselves are
+ * milliseconds over ~2000 rows, so the "slowest panel gates the page" cost that
+ * argued for splitting is noise next to the start-up it now avoids seven times
+ * over.
+ *
+ * The per-dataset routes remain: they cost nothing to keep, and they are what
+ * the smoke suite and an agent debugging one panel actually want.
+ */
+export const bundle = async (): Promise<HistoryBundle | Unavailable> => {
+  const head = await summary();
+  if (!head.available) return head;
+
+  const [exerciseRows, maxes, body, rides, runs] = await Promise.all([
+    exercises(),
+    repMaxes(),
+    bodyweight(),
+    cardio(),
+    streaks(),
+  ]);
+
+  return {
+    available: true,
+    summary: head,
+    exercises: exerciseRows.available ? exerciseRows.exercises : [],
+    repMaxes: maxes.available ? maxes.repMaxes : [],
+    bodyweight: body.available ? body.points : [],
+    cardio: rides.available ? rides.weeks : [],
+    streaks: runs.available ? runs.streaks : [],
+  };
+};

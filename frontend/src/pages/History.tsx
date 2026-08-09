@@ -1,13 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  api,
-  type HistoryBodyPoint,
-  type HistoryCardioWeek,
-  type HistoryExercise,
-  type HistoryRepMax,
-  type HistoryStreak,
-  type HistoryVolumePoint,
-} from "../api.js";
+import { api, type HistoryRepMax, type HistoryVolumePoint } from "../api.js";
 import { Banner, BarChart, LineChart, Loading } from "../components.jsx";
 
 /**
@@ -28,14 +20,7 @@ const REP_COLUMNS = [1, 3, 5, 10, 12];
 
 const KG = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(1)}t` : `${Math.round(v)}kg`);
 
-interface Loaded {
-  summary: Awaited<ReturnType<typeof api.historySummary>>;
-  exercises: HistoryExercise[];
-  repMaxes: HistoryRepMax[];
-  body: HistoryBodyPoint[];
-  cardio: HistoryCardioWeek[];
-  streaks: HistoryStreak[];
-}
+type Loaded = Awaited<ReturnType<typeof api.history>>;
 
 export const HistoryPage = () => {
   const [data, setData] = useState<Loaded | null>(null);
@@ -46,27 +31,14 @@ export const HistoryPage = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // One request per dataset, in parallel. They are independent queries over
-    // independent Parquet, so serialising them would only add latency — and a
-    // single combined endpoint would make every panel wait for the slowest.
-    Promise.all([
-      api.historySummary(),
-      api.historyExercises(),
-      api.historyRepMaxes(),
-      api.historyBodyweight(),
-      api.historyCardio(),
-      api.historyStreaks(),
-    ])
-      .then(([summary, exercises, repMaxes, body, cardio, streaks]) =>
-        setData({
-          summary,
-          exercises: exercises.available ? exercises.exercises : [],
-          repMaxes: repMaxes.available ? repMaxes.repMaxes : [],
-          body: body.available ? body.points : [],
-          cardio: cardio.available ? cardio.weeks : [],
-          streaks: streaks.available ? streaks.streaks : [],
-        }),
-      )
+    // ONE request for every panel, not one per dataset. The split version was
+    // measurably worse where it counts: warm, seven calls return together in
+    // ~400ms, but this platform scales to zero (ADR-0003), so the first load of
+    // the day is the common one — and seven concurrent requests woke up to
+    // seven cold containers that each paid DuckDB's ~7s start-up separately.
+    api
+      .history()
+      .then(setData)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   }, []);
@@ -82,11 +54,11 @@ export const HistoryPage = () => {
   if (error) return <Banner variant="error">{error}</Banner>;
   if (!data) return null;
 
-  if (!data.summary.available) {
+  if (!data.available) {
     return (
       <>
         <h1>History</h1>
-        <Banner>{data.summary.reason}</Banner>
+        <Banner>{data.reason}</Banner>
         <p className="muted">
           Curate the workbook with <code className="mono">make history</code>, then publish it with{" "}
           <code className="mono">make publish-history ENV=&lt;env&gt;</code>.
@@ -96,6 +68,7 @@ export const HistoryPage = () => {
   }
 
   const s = data.summary;
+  const { exercises, repMaxes, bodyweight, cardio, streaks } = data;
 
   // Volume arrives per exercise per period; the chart wants one bar per period.
   const byPeriod = new Map<string, number>();
@@ -105,7 +78,7 @@ export const HistoryPage = () => {
     .map(([period, value]) => ({ label: period.slice(0, 7), value }));
 
   const repMaxByExercise = new Map<string, Map<number, HistoryRepMax>>();
-  for (const r of data.repMaxes) {
+  for (const r of repMaxes) {
     let row = repMaxByExercise.get(r.exercise);
     if (!row) {
       row = new Map();
@@ -168,7 +141,7 @@ export const HistoryPage = () => {
             <label htmlFor="exercise">Exercise</label>
             <select id="exercise" value={exercise} onChange={(e) => setExercise(e.target.value)}>
               <option value="">All exercises</option>
-              {data.exercises.map((e) => (
+              {exercises.map((e) => (
                 <option key={e.exercise} value={e.exercise}>
                   {e.exercise}
                 </option>
@@ -195,12 +168,12 @@ export const HistoryPage = () => {
             {
               name: "Weight",
               colour: "var(--series-6)",
-              points: data.body.map((p) => ({ date: p.date, value: p.weightKg })),
+              points: bodyweight.map((p) => ({ date: p.date, value: p.weightKg })),
             },
             {
               name: "7-day trend",
               colour: "var(--series-2)",
-              points: data.body.map((p) => ({ date: p.date, value: p.trendKg })),
+              points: bodyweight.map((p) => ({ date: p.date, value: p.trendKg })),
             },
           ]}
         />
@@ -257,7 +230,7 @@ export const HistoryPage = () => {
           comparable across five years in which body weight moved by ten kilos.
         </p>
         <BarChart
-          bars={data.cardio.map((w) => ({ label: w.week.slice(0, 7), value: w.distanceKm }))}
+          bars={cardio.map((w) => ({ label: w.week.slice(0, 7), value: w.distanceKm }))}
           colour="var(--series-3)"
           format={(v) => `${Math.round(v)}km`}
         />
@@ -269,7 +242,7 @@ export const HistoryPage = () => {
             {
               name: "Weighted avg W/kg",
               colour: "var(--series-5)",
-              points: data.cardio
+              points: cardio
                 .filter((w) => w.avgWattsPerKg !== null)
                 .map((w) => ({ date: w.week, value: w.avgWattsPerKg as number })),
             },
@@ -294,7 +267,7 @@ export const HistoryPage = () => {
               </tr>
             </thead>
             <tbody>
-              {data.streaks.slice(0, 10).map((st) => (
+              {streaks.slice(0, 10).map((st) => (
                 <tr key={`${st.start}-${st.end}`}>
                   <td className="mono">{st.start}</td>
                   <td className="mono">{st.end}</td>
@@ -327,7 +300,7 @@ export const HistoryPage = () => {
               </tr>
             </thead>
             <tbody>
-              {data.exercises.map((e) => (
+              {exercises.map((e) => (
                 <tr key={e.exercise}>
                   <td>
                     {e.exercise}

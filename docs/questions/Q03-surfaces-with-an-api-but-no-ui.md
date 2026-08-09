@@ -44,3 +44,16 @@ building the first time a fixture moves; cardio logging becomes worth building
 the first time a row is worth recording next to a squat. In each case the
 trigger is an event that has not happened yet, which is precisely why the
 question is queued rather than answered.
+
+---
+
+## Update, 2026-08-09
+
+Cardio logging now has a **read** surface: the History page charts weekly
+distance, moving time, elevation and watts-per-kilogram from the imported
+Strava export (ADR-0026). That is not the same as the *write* surface this
+question asks about — nothing in the app records a ride — but it does change
+what "no UI" means for cardio, and the charts are the thing an athlete would
+have wanted the write surface for.
+
+Week 6 acceptance and season editing are unchanged: still API-only.

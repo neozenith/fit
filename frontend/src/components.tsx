@@ -138,14 +138,44 @@ export const Loading = ({ what }: { what: string }) => (
  * larger than the entire rest of this bundle. Colours come from the theme's
  * categorical tokens so it inverts with everything else.
  */
+const DAY_MS = 86_400_000;
+
+/** Split a series wherever the sampling gap exceeds the tolerance. */
+const splitOnGaps = (
+  points: Array<{ date: string; value: number }>,
+  maxGapDays?: number,
+): Array<Array<{ date: string; value: number }>> => {
+  if (maxGapDays === undefined || points.length === 0) return [points];
+  const segments: Array<Array<{ date: string; value: number }>> = [[]];
+  let previous: number | null = null;
+  for (const point of points) {
+    const at = Date.parse(point.date);
+    if (previous !== null && at - previous > maxGapDays * DAY_MS) segments.push([]);
+    (segments.at(-1) as Array<{ date: string; value: number }>).push(point);
+    previous = at;
+  }
+  return segments.filter((s) => s.length > 0);
+};
+
 export const LineChart = ({
   series,
   height = 220,
   yLabel = "",
+  maxGapDays,
 }: {
   series: Array<{ name: string; colour: string; points: Array<{ date: string; value: number }> }>;
   height?: number;
   yLabel?: string;
+  /**
+   * Break the line when consecutive points are further apart than this.
+   *
+   * A line asserts continuity. Across a three-year gap in weigh-ins it drew one
+   * straight segment from 92kg to 99kg, which reads as steady gain and is a
+   * claim the data does not make — the truth is that nothing was recorded. Left
+   * undefined the line is unbroken, which is right for a series sampled at a
+   * regular cadence.
+   */
+  maxGapDays?: number;
 }) => {
   const all = series.flatMap((s) => s.points);
   if (all.length === 0) return <p className="muted">Nothing logged yet.</p>;
@@ -193,13 +223,18 @@ export const LineChart = ({
         ))}
         {series.map((s) => (
           <g key={s.name}>
-            <polyline
-              fill="none"
-              stroke={s.colour}
-              strokeWidth={2}
-              strokeLinejoin="round"
-              points={s.points.map((p) => `${x(p.date)},${y(p.value)}`).join(" ")}
-            />
+            {splitOnGaps(s.points, maxGapDays).map((segment, i) => (
+              <polyline
+                // Index: two segments can legitimately start on the same date
+                // once a series is filtered, and a date key would drop one.
+                key={`${s.name}-seg-${i}`}
+                fill="none"
+                stroke={s.colour}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                points={segment.map((p) => `${x(p.date)},${y(p.value)}`).join(" ")}
+              />
+            ))}
             {s.points.map((p, i) => (
               // Index, not `date-value`: two weeks with the same median produce
               // an identical composite key, and React silently drops the
@@ -231,6 +266,102 @@ export const LineChart = ({
           </span>
         ))}
       </div>
+    </>
+  );
+};
+
+/**
+ * A categorical bar chart.
+ *
+ * Separate from `LineChart` rather than a mode of it, because the two answer
+ * different questions and the axes are not interchangeable: a line implies
+ * continuity between points, which is exactly wrong for "volume in March" —
+ * a month with no training is a missing bar, not a dip in a trend.
+ *
+ * Hand-drawn for the same reason as `LineChart`: a charting dependency would
+ * outweigh the entire rest of the bundle.
+ */
+export const BarChart = ({
+  bars,
+  height = 220,
+  colour = "var(--series-1)",
+  format = (v: number) => String(Math.round(v)),
+}: {
+  bars: Array<{ label: string; value: number }>;
+  height?: number;
+  colour?: string;
+  format?: (value: number) => string;
+}) => {
+  if (bars.length === 0) return <p className="muted">Nothing in this range.</p>;
+
+  const width = 720;
+  const pad = { top: 12, right: 12, bottom: 34, left: 56 };
+  const maxV = Math.max(...bars.map((b) => b.value)) || 1;
+
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const slot = plotW / bars.length;
+  // A one-pixel floor keeps a bar visible at all: a period with a little work
+  // rendering as literally nothing is indistinguishable from a period with none.
+  const barW = Math.max(1, slot * 0.72);
+
+  // At most eight labels, whatever the range. Five years of months is sixty
+  // ticks, which overlap into an unreadable smear.
+  const labelEvery = Math.max(1, Math.ceil(bars.length / 8));
+
+  return (
+    <>
+      <svg
+        className="chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={`${bars.length} periods, peak ${format(maxV)}`}
+        preserveAspectRatio="xMidYMid meet"
+      >
+        <title>{`Peak ${format(maxV)}`}</title>
+        {[0, maxV / 2, maxV].map((t) => {
+          const ty = pad.top + plotH - (t / maxV) * plotH;
+          return (
+            <g key={t}>
+              <line className="grid-line" x1={pad.left} x2={width - pad.right} y1={ty} y2={ty} />
+              <text className="axis-label" x={4} y={ty + 3}>
+                {format(t)}
+              </text>
+            </g>
+          );
+        })}
+        {bars.map((b, i) => {
+          const h = (b.value / maxV) * plotH;
+          return (
+            // Index, not label: two periods can share a label once a range is
+            // filtered, and React would silently drop the duplicate bar.
+            <rect
+              key={`${b.label}-${i}`}
+              x={pad.left + i * slot + (slot - barW) / 2}
+              y={pad.top + plotH - h}
+              width={barW}
+              height={Math.max(h, b.value > 0 ? 1 : 0)}
+              fill={colour}
+              rx={1}
+            >
+              <title>{`${b.label}: ${format(b.value)}`}</title>
+            </rect>
+          );
+        })}
+        {bars.map((b, i) =>
+          i % labelEvery === 0 ? (
+            <text
+              key={`label-${b.label}-${i}`}
+              className="axis-label"
+              x={pad.left + i * slot + slot / 2}
+              y={height - 10}
+              textAnchor="middle"
+            >
+              {b.label}
+            </text>
+          ) : null,
+        )}
+      </svg>
     </>
   );
 };

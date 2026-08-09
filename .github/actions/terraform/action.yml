@@ -48,6 +48,15 @@ runs:
         # produces a different hash every run and every plan shows a change.
         test -s api/dist/index.mjs || { echo "::error::API bundle is empty"; exit 1; }
 
+    - name: Build the DuckDB layer
+      # Built here, on an x86 runner, for arm64 — see the script. It is safe to
+      # run on every plan because the output is byte-deterministic for a given
+      # pinned version, so a plan only shows a layer change when the version
+      # actually moves.
+      if: inputs.build_app == 'true'
+      shell: bash
+      run: ./tools/build-duckdb-layer.sh
+
     - name: Assume the deployer role
       uses: aws-actions/configure-aws-credentials@v6
       with:

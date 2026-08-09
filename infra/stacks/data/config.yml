@@ -2,7 +2,7 @@
 #
 # The hot window is the one number here that is a real trade-off. 13 months,
 # not 12, so a year-on-year comparison is always answerable from DynamoDB alone
-# and never has to reach Athena (ADR-0012).
+# and never has to reach the Parquet archive (ADR-0012).
 
 app_name: fit
 region: ap-southeast-2
@@ -13,10 +13,7 @@ environments:
     # continuously instead of once a year, which is the only way its bugs are
     # ever found before they matter.
     hot_window_months: 1
-    athena_scan_limit_bytes: 1073741824
   test:
     hot_window_months: 13
-    athena_scan_limit_bytes: 1073741824
   prod:
     hot_window_months: 13
-    athena_scan_limit_bytes: 10737418240

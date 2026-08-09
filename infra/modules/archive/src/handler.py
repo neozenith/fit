@@ -37,12 +37,10 @@ logger.setLevel(logging.INFO)
 
 DYNAMODB = boto3.client("dynamodb")
 S3 = boto3.client("s3")
-GLUE = boto3.client("glue")
 DESERIALIZE = TypeDeserializer()
 
 TABLE_PREFIX = os.environ["TABLE_PREFIX"]
 ARCHIVE_BUCKET = os.environ["ARCHIVE_BUCKET"]
-GLUE_DATABASE = os.environ["GLUE_DATABASE"]
 HOT_WINDOW_MONTHS = int(os.environ["HOT_WINDOW_MONTHS"])
 
 # Only these. `blocks` and `season` are configuration and stay hot forever.
@@ -60,7 +58,7 @@ def cutoff_iso(now: datetime) -> str:
     """The instant before which items are cold.
 
     Thirteen months, not twelve, so a year-on-year comparison is always
-    answerable from the hot path alone and never has to reach Athena.
+    answerable from the hot path alone and never has to reach the archive.
 
     Month arithmetic is done by day-count deliberately: `relativedelta` is not
     in the standard library and the precision genuinely does not matter here —
@@ -153,41 +151,6 @@ def verify(key: str, expected_rows: int) -> bool:
     return True
 
 
-def register_partition(logical: str, year: str, month: str) -> None:
-    """Make the partition visible to Athena.
-
-    Failure here is logged and swallowed ON PURPOSE — and it is the ONLY place
-    in this job where that is acceptable. The data is written and verified; an
-    unregistered partition is invisible until the next run repairs it, whereas
-    aborting would leave the DynamoDB items in place and the whole job would
-    re-do the write next time.
-    """
-    location = f"s3://{ARCHIVE_BUCKET}/tables/{logical}/year={year}/month={month}/"
-    try:
-        GLUE.batch_create_partition(
-            DatabaseName=GLUE_DATABASE,
-            TableName=logical,
-            PartitionInputList=[
-                {
-                    "Values": [year, month],
-                    "StorageDescriptor": {
-                        "Location": location,
-                        "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                        "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
-                        "SerdeInfo": {
-                            "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
-                        },
-                    },
-                }
-            ],
-        )
-    except GLUE.exceptions.EntityNotFoundException:
-        logger.warning("Glue table %s.%s does not exist yet — partition not registered",
-                       GLUE_DATABASE, logical)
-    except Exception:
-        logger.exception("could not register partition %s", location)
-
-
 def delete_items(table: str, items: list[dict[str, Any]]) -> int:
     """Delete the archived items. Runs ONLY after a successful verify."""
     deleted = 0
@@ -249,7 +212,6 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 logger.error("aborting %s: %s did not verify", logical, key)
                 break
 
-            register_partition(logical, year, month)
             archived += len(rows)
             deleted += delete_items(table, rows)
 

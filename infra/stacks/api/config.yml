@@ -1,15 +1,18 @@
 # API stack configuration.
 #
-# The FinOps identifiers are GLOBAL and identical in every environment: cost
-# data is account-scoped, so every environment reads the same tables and
-# filters them by the Environment tag (ADR-0015).
+# The FinOps location is GLOBAL and identical in every environment: cost data
+# is account-scoped, so every environment reads the same Parquet and filters it
+# by the Environment tag (ADR-0015).
 
 app_name: fit
 region: ap-southeast-2
 
 finops:
-  glue_database: fit_finops
-  athena_workgroup: fit-finops
+  # Must match `local.cur_data_path` in infra/modules/finops/main.tf — AWS Data
+  # Exports writes to `{prefix}/{export-name}/data/`, and the export name is the
+  # FinOps stack's own name_prefix. A mismatch here is silent: the glob matches
+  # nothing and the page reports "no data yet" forever.
+  prefix: cur/fit-finops/data
 
 environments:
   dev: {}

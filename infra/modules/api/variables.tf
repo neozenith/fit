@@ -16,19 +16,17 @@ variable "table_arns" {
 
 variable "archive_bucket" { type = string }
 variable "archive_bucket_arn" { type = string }
-variable "glue_database" { type = string }
-variable "athena_workgroup" { type = string }
 
-variable "finops_database" {
-  description = "Glue database of the global FinOps stack. Same value in every environment (ADR-0015)."
+variable "finops_bucket" {
+  description = "Bucket holding the CUR export. Same value in every environment (ADR-0015)."
   type        = string
   default     = ""
 }
 
-variable "finops_workgroup" {
-  description = "Athena workgroup of the global FinOps stack."
+variable "finops_prefix" {
+  description = "Prefix beneath which the export lands. Globbed by DuckDB; there is no catalogue (ADR-0025)."
   type        = string
-  default     = ""
+  default     = "cur"
 }
 
 variable "finops_bucket_arn" {
@@ -39,4 +37,15 @@ variable "finops_bucket_arn" {
   EOT
   type        = string
   default     = ""
+}
+
+variable "duckdb_layer_dir" {
+  description = <<-EOT
+    Directory holding the built DuckDB layer, zipped at plan time.
+
+    Produced by tools/build-duckdb-layer.sh and nothing else. The query path
+    imports DuckDB at module scope, so a missing or wrong-architecture layer
+    fails at cold start rather than on the first cost query.
+  EOT
+  type        = string
 }

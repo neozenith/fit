@@ -14,11 +14,21 @@ import {
 import { z } from "zod";
 import { ENVIRONMENT } from "./const.js";
 import { queryFinops } from "./finops.js";
+import {
+  bodyweight as historyBodyweight,
+  cardio as historyCardio,
+  exercises as historyExercises,
+  repMaxes as historyRepMaxes,
+  streaks as historyStreaks,
+  summary as historySummary,
+  volume as historyVolume,
+} from "./history.js";
 import { type Identity, UnauthenticatedError, userKey, verifyIdentity } from "./identity.js";
 import { type Item, putItem, putItems, queryByType, sortKey } from "./repo.js";
 import {
   createBlockSchema,
   finopsQuerySchema,
+  historyVolumeQuerySchema,
   logSetsSchema,
   measurementSchema,
   seasonPlanSchema,
@@ -351,6 +361,43 @@ const ROUTES: Route[] = [
     handle: async (ctx, req) => putSeason(ctx, await req.json()),
   },
   { method: "GET", pattern: /^\/api\/progress$/, handle: (ctx) => getProgress(ctx) },
+  // --- Imported history ------------------------------------------------------
+  // Read-only, derived in SQL from the curated Parquet. No writes: the import
+  // is an operator action (tools/publish-history.ts), never a request.
+  { method: "GET", pattern: /^\/api\/history$/, handle: async () => json(await historySummary()) },
+  {
+    method: "GET",
+    pattern: /^\/api\/history\/exercises$/,
+    handle: async () => json(await historyExercises()),
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/history\/volume$/,
+    handle: async (_ctx, _req, url) => {
+      const q = historyVolumeQuerySchema.parse(Object.fromEntries(url.searchParams));
+      return json(await historyVolume(q.grain, q.exercise));
+    },
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/history\/rep-maxes$/,
+    handle: async () => json(await historyRepMaxes()),
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/history\/bodyweight$/,
+    handle: async () => json(await historyBodyweight()),
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/history\/cardio$/,
+    handle: async () => json(await historyCardio()),
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/history\/streaks$/,
+    handle: async () => json(await historyStreaks()),
+  },
   {
     method: "GET",
     pattern: /^\/api\/finops$/,

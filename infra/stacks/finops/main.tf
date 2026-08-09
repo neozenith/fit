@@ -19,6 +19,4 @@ module "finops" {
   name_prefix   = local.name_prefix
   account_id    = data.aws_caller_identity.current.account_id
   bucket_region = local.config.region
-
-  athena_scan_limit_bytes = local.config.athena_scan_limit_bytes
 }

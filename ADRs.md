@@ -34,6 +34,7 @@ Status values: `Accepted`, `Superseded by ADR-NNNN`, `Proposed`.
 | [0022](#adr-0022--a-cold-environment-is-stood-up-by-one-ordered-ci-run-not-by-relaxing-the-stacks) | A cold environment is stood up by one ordered CI run | Accepted |
 | [0023](#adr-0023--ci-concurrency-is-keyed-on-the-terraform-state-key-not-the-git-ref) | CI concurrency is keyed on the Terraform state key | Accepted |
 | [0024](#adr-0024--the-spa-fallback-lives-in-the-edge-function-not-in-custom_error_response) | The SPA fallback lives in the edge function | Accepted |
+| [0025](#adr-0025--duckdb-in-the-lambda-replaces-glue-and-athena) | DuckDB in the Lambda replaces Glue and Athena | Accepted |
 
 ---
 
@@ -720,3 +721,85 @@ among the most time-consuming ways for a missing file to present.
 > check its SCOPE. A distribution-wide rule applied to fix one behaviour will
 > silently reshape every other one — and the damage shows up furthest from the
 > configuration that caused it.
+
+---
+
+## ADR-0025 — DuckDB in the Lambda replaces Glue and Athena
+
+**Status:** Accepted — supersedes the query surface of ADR-0012 and ADR-0015
+
+**Context.** The first design catalogued Parquet with Glue and queried it with
+Athena, because that is the default answer to "Parquet on S3". Building it
+exposed how poorly that answer fits *this* workload.
+
+**Athena is priced and shaped for data this platform does not have.** It bills a
+**10MB minimum per query**. One user's training log is a few thousand rows a
+year — kilobytes. Every query would be billed at ~200× the bytes it read. Even
+the CUR is tens of megabytes a month.
+
+**The catalogue is a second source of truth that must be kept in sync.** A Glue
+crawler runs on a schedule, so freshly archived data is invisible until it next
+runs — the FinOps page reported "no data yet" for hours after a successful
+deploy, and that was correct behaviour. The crawler also needs
+`CombineCompatibleSchemas`, because a CUR gains columns whenever AWS adds a
+service, and without it the crawler silently creates a *new table* and the old
+one stops updating.
+
+**Athena is asynchronous, so the client is a polling loop.** Start, poll, fetch,
+with a timeout ceiling and a free-text failure string that has to be pattern
+matched to tell "the table does not exist yet" from "you lack permission" — an
+entire module (`finops-errors.ts`) existing only to classify one vendor's error
+prose, with tests pinning a regex against strings AWS may reword.
+
+**Decision.** Delete Glue and Athena entirely. Query the Parquet in S3 directly
+with **DuckDB, inside the Lambda**:
+
+```sql
+SELECT ... FROM read_parquet('s3://bucket/tables/sets/**/*.parquet',
+                             hive_partitioning = true)
+```
+
+The S3 layout **is** the schema. There is no catalogue to register, crawl, or
+drift.
+
+**Consequences — mostly deletion:**
+
+| Removed | |
+|---|---|
+| Glue database ×2, crawler, crawler IAM role | ~10 Terraform resources |
+| Athena workgroups ×2, results prefix + lifecycle rule | |
+| `glue:` and `athena:` IAM statements | 8 |
+| Athena start/poll/fetch client | ~160 lines |
+| `finops-errors.ts` and its regex tests | 28 lines + 15 tests |
+| `register_partition` in the archive job | and its swallowed-error path |
+
+That last one is a genuine correctness gain, not just less code: partition
+registration was the **only** place in the age-out job where an error was logged
+and continued. With no catalogue there is nothing to register, so the exception
+disappears rather than being justified.
+
+Newly archived data is queryable **immediately**, because writing the file *is*
+publishing it.
+
+**What it costs.** A 36MB Lambda layer and a build script, which turned out to
+carry three traps rather than the one anticipated:
+
+1. **`npm`/`bun` resolve the native binding for the build host.** A layer built
+   on macOS ships the darwin binary. The binding is an *optional dependency*
+   keyed on `os`/`cpu`, so the fix is `npm --os=linux --cpu=arm64 --libc=glibc`
+   — and `--include=optional`, without which npm resolves nothing for either
+   platform, exits 0, and produces a layer with no binary in it.
+2. **Only `parquet` is statically linked.** `httpfs` and `aws` are downloaded on
+   first use into `$HOME`, which Lambda mounts read-only — so the first S3 read
+   fails in the deployed environment and nowhere else. Both are baked into the
+   layer and autoinstall is disabled, so a missing bake fails loudly.
+3. **An empty glob is an error, not an empty result.** The claim above that "a
+   missing prefix returns zero rows" was wrong: `read_parquet` raises
+   `IO Error: No files found`. The API decides that case from a `glob()`
+   listing, which genuinely does return zero rows. Deciding it from the error
+   *text* would have reinstated the classifier this ADR set out to delete.
+
+> **Lens.** Match the query engine to the data's SIZE, not to its FORMAT.
+> "Parquet on S3" suggests a warehouse; kilobytes suggest a library. A managed
+> service that bills a minimum per query is the wrong shape for data smaller
+> than that minimum, however well it fits the file format.

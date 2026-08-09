@@ -89,7 +89,7 @@ resource "aws_dynamodb_table" "table" {
 }
 
 # --- Cold storage ------------------------------------------------------------
-# Parquet written by the archive job, queried through Athena. Separate bucket
+# Parquet written by the archive job, read directly by DuckDB. Separate bucket
 # from anything else so a lifecycle rule here can never touch application
 # assets, and so its cost line is unambiguous.
 
@@ -163,52 +163,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "archive" {
 }
 
 # --- Query surface -----------------------------------------------------------
-# One Glue database per environment. The archive job registers partitions here,
-# and the API's cold-path reads go through Athena against it.
-
-resource "aws_glue_catalog_database" "archive" {
-  name        = replace("${var.name_prefix}_archive", "-", "_")
-  description = "Parquet archive of aged-out DynamoDB items for ${var.environment}."
-}
-
-# Athena needs somewhere to spill results. Its own prefix in the archive bucket
-# rather than its own bucket: the lifecycle rule below is the only thing that
-# has to be right, and results are worthless after the request that made them.
-resource "aws_s3_bucket_lifecycle_configuration" "athena_results" {
-  bucket = aws_s3_bucket.archive.id
-  rule {
-    id     = "expire-athena-results"
-    status = "Enabled"
-    filter {
-      prefix = "athena-results/"
-    }
-    expiration {
-      days = 7
-    }
-  }
-  depends_on = [aws_s3_bucket_lifecycle_configuration.archive]
-}
-
-resource "aws_athena_workgroup" "app" {
-  name = "${var.name_prefix}-app"
-
-  configuration {
-    enforce_workgroup_configuration    = true
-    publish_cloudwatch_metrics_enabled = true
-
-    # A per-query byte cap is the only real guard against a `SELECT *` over the
-    # whole archive. Set low deliberately: every legitimate query here is
-    # partition-pruned to a handful of months.
-    bytes_scanned_cutoff_per_query = var.athena_scan_limit_bytes
-
-    result_configuration {
-      output_location = "s3://${aws_s3_bucket.archive.bucket}/athena-results/"
-      encryption_configuration {
-        encryption_option = "SSE_S3"
-      }
-    }
-  }
-}
+#
+# There is none, and that is the point (ADR-0025). The archive is Parquet in S3,
+# read directly by DuckDB inside the API Lambda:
+#
+#   SELECT ... FROM read_parquet('s3://bucket/tables/sets/**/*.parquet',
+#                                hive_partitioning = true)
+#
+# The S3 LAYOUT is the schema. No Glue database to register, no crawler to run
+# on a schedule, no Athena workgroup, and no results prefix to expire. Data is
+# queryable the moment it is written, because writing the file IS publishing it.
 
 # --- Cross-stack contract ----------------------------------------------------
 # Published as SSM parameters, never as remote state (ADR-0008). A reader needs
@@ -228,14 +192,3 @@ resource "aws_ssm_parameter" "archive_bucket" {
   value = aws_s3_bucket.archive.bucket
 }
 
-resource "aws_ssm_parameter" "glue_database" {
-  name  = "/${var.app_name}/${var.environment}/data/glue_database"
-  type  = "String"
-  value = aws_glue_catalog_database.archive.name
-}
-
-resource "aws_ssm_parameter" "athena_workgroup" {
-  name  = "/${var.app_name}/${var.environment}/data/athena_workgroup"
-  type  = "String"
-  value = aws_athena_workgroup.app.name
-}

@@ -27,12 +27,34 @@ export const SSM_PREFIX = optional("SSM_PREFIX", `/${APP_NAME}/${ENVIRONMENT}`);
 export const TABLE_PREFIX = optional("TABLE_PREFIX", `${APP_NAME}-${ENVIRONMENT}`);
 
 export const ARCHIVE_BUCKET = optional("ARCHIVE_BUCKET", "");
-export const GLUE_DATABASE = optional("GLUE_DATABASE", "");
-export const ATHENA_WORKGROUP = optional("ATHENA_WORKGROUP", "");
 
-/** Global FinOps stack — identical in every environment (ADR-0015). */
-export const FINOPS_DATABASE = optional("FINOPS_DATABASE", "");
-export const FINOPS_WORKGROUP = optional("FINOPS_WORKGROUP", "");
+/**
+ * Global FinOps export — identical in every environment (ADR-0015).
+ *
+ * A bucket and a prefix, not a database and a workgroup: there is no catalogue
+ * any more, so the only thing an environment needs to know is where the Parquet
+ * lives (ADR-0025).
+ */
+export const FINOPS_BUCKET = optional("FINOPS_BUCKET", "");
+export const FINOPS_PREFIX = optional("FINOPS_PREFIX", "cur");
+
+/**
+ * Where DuckDB finds `httpfs` and `aws`.
+ *
+ * `/opt` is where Lambda unzips a layer, so the deployed default needs no
+ * environment variable. Empty means "use DuckDB's own default", which is what
+ * local development wants: the developer's `~/.duckdb` already holds these, and
+ * pointing at a non-existent `/opt` path locally would break `make dev` for no
+ * benefit.
+ *
+ * Keyed on `AWS_LAMBDA_FUNCTION_NAME` — set by the runtime itself — rather than
+ * on this app's own `ENVIRONMENT`, because the fact being detected is "a layer
+ * is mounted at /opt", which is a property of Lambda and of nothing else.
+ */
+export const DUCKDB_EXTENSION_DIR = optional(
+  "DUCKDB_EXTENSION_DIR",
+  process.env["AWS_LAMBDA_FUNCTION_NAME"] ? "/opt/duckdb-extensions" : "",
+);
 
 /**
  * Local development points the AWS SDK at DynamoDB Local instead of AWS.

@@ -69,6 +69,26 @@ per stack, chained with `needs`.
 - **The archive role has no `PutItem`.** That is the append-only invariant
   (ADR-0013) enforced in IAM rather than trusted to the handler. Do not add it
   to "make the job idempotent" — it already is.
+- **The DuckDB layer cannot be built by `bun install`.** The native binding is
+  an *optional dependency* selected by `os`/`cpu`, so any ordinary install
+  resolves for the build host — a macOS laptop or an x86 runner — and publishes
+  a layer that dies at cold start with a module-resolution error that never
+  says "architecture". `tools/build-duckdb-layer.sh` uses `npm --os --cpu
+  --libc --include=optional`; **`--include=optional` is the load-bearing flag**,
+  because without it npm resolves *nothing* for either platform, exits 0, and
+  produces 1.6MB of JavaScript with no binary in it.
+- **`httpfs` and `aws` are baked into that layer, not installed at runtime.**
+  Only `parquet` is statically linked into DuckDB. The default behaviour is to
+  download the others from extensions.duckdb.org into `$HOME`, which on Lambda
+  is read-only — so the first S3 read fails in the deployed environment and
+  nowhere else. The layer ships them under `/opt/duckdb-extensions/{version}/
+  {platform}/`, and the API sets `autoinstall_known_extensions = false` so a
+  missing bake is a loud failure rather than a silent network call.
+- **An empty Parquet glob is an IO *error*, not an empty result.** `read_parquet`
+  raises when nothing matches, which is the normal state of an account whose
+  first CUR has not landed. `queryParquet` decides that case from a `glob()`
+  listing, never from the text of the error — classifying a vendor's error prose
+  is exactly what ADR-0025 deleted along with Athena.
 - **The pyarrow layer ARN is pinned to an exact version.** A floating `:latest`
   would change the Parquet writer under a job whose entire value is that it does
   not lose data.

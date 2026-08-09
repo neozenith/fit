@@ -408,3 +408,12 @@ button:disabled {
   border-radius: 3px;
   display: inline-block;
 }
+
+/* A headline number in a summary grid. Large enough to read at a glance, and
+   tabular-nums so a column of them does not jitter as digits change width. */
+.stat-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}

@@ -32,6 +32,11 @@ crash.log
 # Lambda build artefacts (synthesized at plan time)
 infra/modules/**/.build/
 
+# The DuckDB layer — 60MB of native binary, rebuilt deterministically from a
+# pinned version by tools/build-duckdb-layer.sh. Committing it would put a
+# platform-specific binary in Git for no gain.
+api/.layer/
+
 # Playwright
 test-results/
 playwright-report/

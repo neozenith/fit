@@ -39,7 +39,7 @@ test.describe("shell", () => {
 
   test("every section is reachable", async ({ page }) => {
     await page.goto("/");
-    for (const label of ["Today", "Block", "Log", "Body", "Progress", "Cost"]) {
+    for (const label of ["Today", "Block", "Log", "Body", "Progress", "History", "Cost"]) {
       await page.getByRole("button", { name: label, exact: true }).click();
       await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute(
         "aria-current",
@@ -175,6 +175,78 @@ test.describe("cost", () => {
     const explained = (await page.getByText(/has not been deployed|no data yet/i).count()) > 0;
 
     expect(hasBreakdown || explained).toBe(true);
+  });
+});
+
+/**
+ * Whether this environment holds an import, decided only once the page has
+ * settled. The wait is the whole point: a skip guard that races the loading
+ * placeholder turns "the query broke" into "nothing to test here".
+ */
+const hasImportedHistory = async (page: Page): Promise<boolean> => {
+  const total = page.getByRole("heading", { name: "In total" });
+  await expect(
+    total.or(page.getByText(/No training history has been imported/i)).first(),
+  ).toBeVisible();
+  return total.isVisible();
+};
+
+test.describe("imported history", () => {
+  test("either renders the archive or says it holds none", async ({ page }) => {
+    await page.goto("/#/history");
+    await expect(page.locator("main h1")).toHaveText("History");
+
+    // Both outcomes are correct, and for a reason worth stating: the import is
+    // an OPERATOR action, not part of a deploy, so a perfectly healthy
+    // environment can legitimately hold no history. What must never happen is
+    // an empty page — that is indistinguishable from a broken query.
+    // Wait for the page to SETTLE before deciding which outcome it is.
+    // `isVisible()` resolves immediately and does not auto-wait, so checking it
+    // while the loading placeholder is still up reports "no history" on an
+    // environment that has plenty — a false pass that then silently skipped
+    // every panel assertion below.
+    const settled = page
+      .getByRole("heading", { name: "In total" })
+      .or(page.getByText(/No training history has been imported/i));
+    await expect(settled.first()).toBeVisible();
+  });
+
+  test("the derived panels render once history is present", async ({ page }) => {
+    await page.goto("/#/history");
+    const imported = await hasImportedHistory(page);
+    test.skip(!imported, "this environment holds no imported history");
+
+    // Every panel is DERIVED in SQL from the imported facts. Asserting each one
+    // renders is what catches a query that returns a shape the page cannot use
+    // — a failure that otherwise shows up as one silently missing card.
+    for (const heading of [
+      "Training volume",
+      "Body weight",
+      "Rep maxes",
+      "Cardio",
+      "Longest streaks",
+      "Exercise catalogue",
+    ]) {
+      await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    }
+
+    // A chart with no geometry renders as an empty box that still passes a
+    // visibility check, so the bars themselves are counted.
+    expect(await page.locator("svg.chart rect").count()).toBeGreaterThan(0);
+    expect(await page.locator("svg.chart polyline").count()).toBeGreaterThan(0);
+  });
+
+  test("switching volume grain re-queries without error", async ({ page }) => {
+    await page.goto("/#/history");
+    test.skip(!(await hasImportedHistory(page)), "this environment holds no imported history");
+    const grain = page.locator("#grain");
+
+    const before = await page.locator("svg.chart rect").count();
+    await grain.selectOption("week");
+    // Weeks are strictly finer than months over the same span, so the bar count
+    // must GROW. Merely asserting "still renders" would pass on a request that
+    // silently failed and left the previous chart on screen.
+    await expect.poll(async () => page.locator("svg.chart rect").count()).toBeGreaterThan(before);
   });
 });
 

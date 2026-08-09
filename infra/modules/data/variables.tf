@@ -18,12 +18,3 @@ variable "account_id" {
   type        = string
 }
 
-variable "athena_scan_limit_bytes" {
-  description = <<-EOT
-    Per-query byte ceiling for the app's Athena workgroup. Every legitimate
-    query here is partition-pruned to a few months of Parquet, so a low cap is
-    the cheapest possible guard against an accidental full-archive scan.
-  EOT
-  type        = number
-  default     = 1073741824 # 1 GiB
-}

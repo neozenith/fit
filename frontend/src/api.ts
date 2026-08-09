@@ -133,4 +133,110 @@ export const api = {
       to?: string;
       rows: Array<{ period: string; key: string; cost: number }>;
     }>(`/api/finops?${new URLSearchParams(params)}`),
+
+  // --- Imported history ------------------------------------------------------
+  // Every one of these can answer `available: false` — the import is an
+  // operator action, so an environment can be entirely healthy and hold none.
+
+  historySummary: () =>
+    request<
+      | { available: false; reason: string }
+      | {
+          available: true;
+          from: string;
+          to: string;
+          sessions: number;
+          sets: number;
+          totalVolumeKg: number;
+          exercises: number;
+          activities: number;
+          weighIns: number;
+          weightFirstKg: number | null;
+          weightLatestKg: number | null;
+        }
+    >("/api/history"),
+
+  historyExercises: () =>
+    request<
+      { available: false; reason: string } | { available: true; exercises: HistoryExercise[] }
+    >("/api/history/exercises"),
+
+  historyVolume: (grain: "week" | "month", exercise?: string) =>
+    request<
+      | { available: false; reason: string }
+      | { available: true; grain: string; points: HistoryVolumePoint[] }
+    >(`/api/history/volume?${new URLSearchParams({ grain, ...(exercise ? { exercise } : {}) })}`),
+
+  historyRepMaxes: () =>
+    request<{ available: false; reason: string } | { available: true; repMaxes: HistoryRepMax[] }>(
+      "/api/history/rep-maxes",
+    ),
+
+  historyBodyweight: () =>
+    request<{ available: false; reason: string } | { available: true; points: HistoryBodyPoint[] }>(
+      "/api/history/bodyweight",
+    ),
+
+  historyCardio: () =>
+    request<{ available: false; reason: string } | { available: true; weeks: HistoryCardioWeek[] }>(
+      "/api/history/cardio",
+    ),
+
+  historyStreaks: () =>
+    request<{ available: false; reason: string } | { available: true; streaks: HistoryStreak[] }>(
+      "/api/history/streaks",
+    ),
 };
+
+export interface HistoryExercise {
+  exercise: string;
+  equipment: string;
+  entries: number;
+  totalSets: number;
+  totalVolumeKg: number;
+  heaviestKg: number;
+  firstSeen: string;
+  lastSeen: string;
+  isIsometric: boolean;
+  isUnilateral: boolean;
+  isBodyweightLoaded: boolean;
+}
+
+export interface HistoryVolumePoint {
+  period: string;
+  exercise: string;
+  volumeKg: number;
+  sets: number;
+  topWeightKg: number;
+}
+
+export interface HistoryRepMax {
+  exercise: string;
+  reps: number;
+  weightKg: number;
+  achievedOn: string;
+  bodyweightRatio: number | null;
+}
+
+export interface HistoryBodyPoint {
+  date: string;
+  weightKg: number;
+  bmi: number;
+  trendKg: number;
+}
+
+export interface HistoryCardioWeek {
+  week: string;
+  activities: number;
+  distanceKm: number;
+  movingHours: number;
+  elevationM: number;
+  avgWattsPerKg: number | null;
+}
+
+export interface HistoryStreak {
+  start: string;
+  end: string;
+  days: number;
+  activeDays: number;
+}

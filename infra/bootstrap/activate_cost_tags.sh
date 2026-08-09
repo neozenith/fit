@@ -33,6 +33,36 @@ TAG_KEYS=(Project Environment Stack ManagedBy)
 
 log "Activating cost-allocation tags in account ${ACCOUNT_ID}"
 
+# Probe FIRST, because the two failure modes need opposite advice and are
+# otherwise indistinguishable in the output.
+#
+# In an AWS Organization, cost-allocation tags are owned by the PAYER account.
+# A linked account gets `AccessDeniedException: Linked account doesn't have
+# access to cost allocation tags` on every call — so the per-key loop below
+# would print "not activatable yet, re-run after the first apply" four times,
+# which is advice that can never succeed here. Saying which world we are in is
+# the difference between a next step and a wild goose chase.
+if ! probe="$(aws_ ce list-cost-allocation-tags --region "${BILLING_REGION}" \
+      --max-results 1 --output text 2>&1)"; then
+  if printf '%s' "${probe}" | grep -q "Linked account"; then
+    cat <<EOF
+
+==> This is a LINKED account; cost-allocation tags are the payer's to activate.
+
+  Every resource already carries Project, Environment, Stack and ManagedBy via
+  provider default_tags, so nothing is missing on this side. Until the PAYER
+  account activates those keys, the Cost and Usage Report carries only the keys
+  it has already activated, and the FinOps page groups by those alone.
+
+  Activation is not retroactive (ADR-0014): spend incurred before the payer
+  activates a key stays unattributable to it forever.
+
+EOF
+    exit 0
+  fi
+  die "cannot read cost-allocation tags: ${probe}"
+fi
+
 for key in "${TAG_KEYS[@]}"; do
   if [ -n "${DRYRUN}" ]; then
     sub "DRYRUN: would activate '${key}'"

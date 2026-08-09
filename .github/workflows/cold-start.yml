@@ -219,6 +219,8 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
           role-session-name: gha-tags-${{ github.run_id }}
+      # No `AWS_PROFILE: ""` here. Setting it EMPTY is worse than leaving it
+      # alone: the AWS CLI then looks for a profile literally named "" and every
+      # call fails. `config.sh` already forces the ambient path under CI, and
+      # `_common.sh` unsets the variable outright.
       - run: infra/bootstrap/activate_cost_tags.sh
-        env:
-          AWS_PROFILE: ""

@@ -12,7 +12,20 @@ DRYRUN="${DRYRUN:-}"
 
 # --profile is optional: an empty APP_PROFILE means "use ambient credentials".
 PROFILE_ARGS=()
-[ -n "${APP_PROFILE:-}" ] && PROFILE_ARGS=(--profile "${APP_PROFILE}")
+if [ -n "${APP_PROFILE:-}" ]; then
+  PROFILE_ARGS=(--profile "${APP_PROFILE}")
+else
+  # UNSET, not empty. An empty `AWS_PROFILE` is not the same as an unset one to
+  # the AWS CLI: it dutifully looks for a profile named "" and dies with
+  # "The config profile () could not be found". A workflow step writing
+  # `AWS_PROFILE: ""` to mean "use the ambient OIDC credentials" therefore broke
+  # every call it made — the opposite of what it was asking for.
+  #
+  # This is the sibling of the `${VAR-default}` note in config.sh: there, an
+  # empty value was wrongly treated as unset; here, an empty value must BE
+  # unset. Clearing it once at the source covers every caller.
+  unset AWS_PROFILE
+fi
 
 # App identity, derived from the enclosing git repo unless config.sh overrode it.
 GITHUB_REPO="${GITHUB_REPO:-$(git -C "${SCRIPT_DIR}" remote get-url origin \

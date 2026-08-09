@@ -1,100 +1,119 @@
-import { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { EQUIPMENT, MOVEMENT_LABEL, MOVEMENTS, type Movement } from "@fit/program";
+import { useCallback, useEffect, useState } from "react";
+import { api, type CuratedExercise } from "../api.js";
 import { Banner, Loading } from "../components.jsx";
 import { Segmented, SelectFilter } from "../filters.jsx";
 import { useQueryParam } from "../router.jsx";
 
 /**
- * The exercise catalogue — a root page, not a section of history.
+ * The exercise catalogue — the app's single source of truth, and where it is
+ * curated.
  *
- * A TABLE and nothing else. The charts that were here answered a question this
- * page is not for: "where does my volume go" belongs on the volume page, which
- * has the filters and the time axis to answer it properly. A reference list
- * wants to be scannable and sortable, and two charts above it just pushed the
- * reference below the fold.
+ * It used to be three sources that disagreed: a hardcoded menu per accessory
+ * slot, a canonical list transcribed from the Google Form, and whatever the
+ * imported archive happened to contain. The disagreement was visible — Romanian
+ * Deadlift appears in the archive five times and still could not be picked as a
+ * deadlift variation, because that slot's menu was a literal of four strings.
  *
- * It is a reference for the whole app rather than a chart about the past: what
- * movements exist, what equipment they need, which are unilateral or isometric.
- * Filing it under `/history` implied it only described the archive.
+ * Two axes, because two different questions get asked. EQUIPMENT answers "what
+ * do I need" and is how history is filtered. MOVEMENT answers "what does this
+ * train" and is how a prescribed accessory slot is filled: the program asks for
+ * a horizontal pull, and which one is the athlete's choice.
  *
- * Derived from the log itself rather than transcribed from the workbook's own
- * `Type` column, which evaluates to `#VALUE!` on a third of its rows. A
- * catalogue built from the log cannot list a movement never performed, nor omit
- * one that was.
+ * Editing here changes what the pickers offer, immediately. That is the point.
  */
 
 const SORTS = [
-  { value: "volume", label: "Volume" },
-  { value: "heaviest", label: "Heaviest" },
-  { value: "entries", label: "Frequency" },
   { value: "name", label: "Name" },
+  { value: "equipment", label: "Equipment" },
+  { value: "movement", label: "Movement" },
 ];
 
-const KG = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(1)}t` : `${Math.round(v)}kg`);
-
 export const ExercisesPage = () => {
-  const [data, setData] = useState<Awaited<ReturnType<typeof api.historyExercises>> | null>(null);
+  const [rows, setRows] = useState<CuratedExercise[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sort] = useQueryParam("sort", "volume");
+  const [saving, setSaving] = useState<string | null>(null);
+  const [sort] = useQueryParam("sort", "name");
   const [equipment] = useQueryParam("equipment", "");
+  const [movement] = useQueryParam("movement", "");
+
+  const load = useCallback(() => api.catalogue().then((r) => setRows(r.exercises)), []);
 
   useEffect(() => {
-    api
-      .historyExercises()
-      .then(setData)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
+    load().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, [load]);
 
-  if (error) return <Banner variant="error">{error}</Banner>;
-  if (!data) return <Loading what="the exercise catalogue" />;
-  if (!data.available) {
-    return (
-      <>
-        <h1>Exercises</h1>
-        <Banner>{data.reason}</Banner>
-        <p className="muted">
-          The catalogue is derived from imported history. Curate it with{" "}
-          <code className="mono">make history</code>, then publish with{" "}
-          <code className="mono">make publish-history ENV=&lt;env&gt;</code>.
-        </p>
-      </>
+  const save = async (entry: CuratedExercise, patch: Partial<CuratedExercise>) => {
+    setSaving(entry.exercise);
+    setError(null);
+    // Optimistic, because the edit is a `<select>` change and waiting for a
+    // round trip before the control reflects it feels broken. A failure below
+    // reloads from the server, so nothing stays wrong.
+    setRows((was) =>
+      (was ?? []).map((r) =>
+        r.exercise === entry.exercise ? { ...r, ...patch, curated: true } : r,
+      ),
     );
-  }
+    try {
+      await api.curateExercise({ ...entry, ...patch });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+      await load().catch(() => undefined);
+    } finally {
+      setSaving(null);
+    }
+  };
 
-  const all = data.exercises;
-  const equipmentTypes = [...new Set(all.map((e) => e.equipment))].sort();
-  const filtered = equipment ? all.filter((e) => e.equipment === equipment) : all;
+  if (error && !rows) return <Banner variant="error">{error}</Banner>;
+  if (!rows) return <Loading what="the exercise catalogue" />;
+
+  const filtered = rows.filter(
+    (r) => (!equipment || r.equipment === equipment) && (!movement || r.movement === movement),
+  );
 
   const ordered = [...filtered].sort((a, b) => {
-    if (sort === "name") return a.exercise.localeCompare(b.exercise);
-    if (sort === "heaviest") return b.heaviestKg - a.heaviestKg;
-    if (sort === "entries") return b.entries - a.entries;
-    return b.totalVolumeKg - a.totalVolumeKg;
+    if (sort === "equipment") {
+      return a.equipment.localeCompare(b.equipment) || a.exercise.localeCompare(b.exercise);
+    }
+    if (sort === "movement") {
+      return a.movement.localeCompare(b.movement) || a.exercise.localeCompare(b.exercise);
+    }
+    return a.exercise.localeCompare(b.exercise);
   });
+
+  const curatedCount = rows.filter((r) => r.curated).length;
 
   return (
     <>
       <h1>Exercises</h1>
       <p className="muted">
-        Every movement ever logged, derived from the log itself — so it cannot list one that was
-        never performed, nor omit one that was.
+        The single source of truth for what a movement is. Accessory pickers read this, so a change
+        here immediately changes what can be prescribed.
       </p>
+      {error && <Banner variant="error">{error}</Banner>}
 
       <div className="filters">
-        <Segmented label="Sort by" param="sort" fallback="volume" options={SORTS} />
+        <Segmented label="Sort by" param="sort" fallback="name" options={SORTS} />
         <SelectFilter
           label="Equipment"
           param="equipment"
           fallback=""
           anyLabel="All equipment"
-          options={equipmentTypes.map((t) => ({ value: t, label: t }))}
+          options={EQUIPMENT.map((value) => ({ value, label: value }))}
+        />
+        <SelectFilter
+          label="Movement"
+          param="movement"
+          fallback=""
+          anyLabel="All movements"
+          options={MOVEMENTS.map((value) => ({ value, label: MOVEMENT_LABEL[value] }))}
         />
       </div>
 
       <section className="card">
         <h2>
-          {filtered.length} movements
-          <span className="muted"> across {equipmentTypes.length} kinds of equipment</span>
+          {ordered.length} movements
+          <span className="muted"> · {curatedCount} curated, the rest as shipped</span>
         </h2>
         <div className="table-scroll">
           <table>
@@ -102,47 +121,71 @@ export const ExercisesPage = () => {
               <tr>
                 <th>Exercise</th>
                 <th>Equipment</th>
-                <th>Entries</th>
-                <th>Sets</th>
-                <th>Volume</th>
-                <th>Heaviest</th>
-                <th>Span</th>
+                <th>Movement</th>
+                <th>Traits</th>
               </tr>
             </thead>
             <tbody>
-              {ordered.map((e) => (
-                <tr key={e.exercise}>
+              {ordered.map((row) => (
+                <tr key={row.exercise} className={saving === row.exercise ? "row--saving" : ""}>
                   <td>
-                    {e.exercise}
-                    {e.isUnilateral && (
-                      <span className="pill" title="Recorded per side">
-                        per side
-                      </span>
-                    )}
-                    {e.isIsometric && (
-                      <span className="pill" title="Reps are seconds held">
-                        hold
-                      </span>
-                    )}
-                    {e.isBodyweightLoaded && (
-                      <span className="pill" title="Loaded by body weight">
-                        bodyweight
+                    {row.exercise}
+                    {row.curated && (
+                      <span className="pill" title="Edited here rather than shipped">
+                        curated
                       </span>
                     )}
                   </td>
-                  <td>{e.equipment}</td>
-                  <td className="mono">{e.entries}</td>
-                  <td className="mono">{e.totalSets}</td>
-                  <td className="mono">{e.isIsometric ? "—" : KG(e.totalVolumeKg)}</td>
-                  <td className="mono">{e.heaviestKg}kg</td>
-                  <td className="mono">
-                    {e.firstSeen} → {e.lastSeen}
+                  <td>
+                    <select
+                      aria-label={`${row.exercise} equipment`}
+                      value={row.equipment}
+                      onChange={(e) => save(row, { equipment: e.target.value })}
+                    >
+                      {EQUIPMENT.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      aria-label={`${row.exercise} movement`}
+                      value={row.movement}
+                      onChange={(e) => save(row, { movement: e.target.value })}
+                    >
+                      {MOVEMENTS.map((value) => (
+                        <option key={value} value={value}>
+                          {MOVEMENT_LABEL[value as Movement]}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="traits">
+                    {(
+                      [
+                        ["unilateral", "per side"],
+                        ["isometric", "hold"],
+                        ["bodyweightLoaded", "bodyweight"],
+                      ] as const
+                    ).map(([field, label]) => (
+                      <label key={field}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(row[field])}
+                          onChange={(e) => save(row, { [field]: e.target.checked })}
+                        />
+                        {label}
+                      </label>
+                    ))}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {ordered.length === 0 && <p className="muted">Nothing matches these filters.</p>}
       </section>
     </>
   );

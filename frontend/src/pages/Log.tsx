@@ -30,13 +30,27 @@ interface RowDraft {
   reps: string;
 }
 
-/** What the program asks for on this set, as editable strings. */
-const prescribedRow = (set: PrescribedSet | undefined): RowDraft => ({
-  weight: set?.weight !== undefined ? String(set.weight) : "",
-  // Only a FIXED rep count pre-fills. A range has no single answer and a
-  // max-reps set is a measurement — both are typed after the fact.
-  reps: set?.reps && "kind" in set.reps && set.reps.kind === "fixed" ? String(set.reps.reps) : "",
-});
+/**
+ * What the program asks for on this set, as editable strings.
+ *
+ * A FIXED count pre-fills with itself and a RANGE pre-fills with its top — you
+ * aim for the top of a range, so that is the number you are most likely to
+ * confirm, and it is one keystroke to change. A MAX-REPS set stays blank: there
+ * is no target at all, and pre-filling one would invite confirming a lift
+ * nobody performed (ADR-0031).
+ */
+const prescribedRow = (set: PrescribedSet | undefined): RowDraft => {
+  const reps = set?.reps;
+  const target =
+    reps && "kind" in reps
+      ? reps.kind === "fixed"
+        ? String(reps.reps)
+        : reps.kind === "range"
+          ? String(reps.max)
+          : ""
+      : "";
+  return { weight: set?.weight !== undefined ? String(set.weight) : "", reps: target };
+};
 
 export const LogPage = () => {
   const [block, setBlock] = useState<BlockConfig | null>(null);
@@ -46,6 +60,9 @@ export const LogPage = () => {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
+  // Rows the athlete has typed into. A carried-forward value must never
+  // overwrite a deliberate one.
+  const [touched, setTouched] = useState<Set<string>>(new Set());
 
   // The selected session lives in the URL, so the overview's "log this one"
   // links open the right session and a half-finished session can be bookmarked.
@@ -109,11 +126,40 @@ export const LogPage = () => {
   const draftFor = (exercise: PrescribedExercise, index: number): RowDraft =>
     drafts[key(exercise.exercise, index)] ?? prescribedRow(exercise.sets[index]);
 
+  /**
+   * Edit one row, and CARRY THE VALUE FORWARD to later untouched rows.
+   *
+   * Straight sets are the overwhelmingly common case: four sets at the same
+   * load, which the program does not prescribe for accessories. Typing 40 four
+   * times is three keystrokes too many, so the first row seeds the rest.
+   *
+   * Only rows that are neither logged nor manually edited are carried into —
+   * `touched` is what stops a deliberate 40/40/35/30 from being flattened back
+   * to 40 the moment you correct set one.
+   */
   const update = (exercise: PrescribedExercise, index: number, patch: Partial<RowDraft>) =>
-    setDrafts((d) => ({
-      ...d,
-      [key(exercise.exercise, index)]: { ...draftFor(exercise, index), ...patch },
-    }));
+    setDrafts((d) => {
+      const next = {
+        ...d,
+        [key(exercise.exercise, index)]: { ...draftFor(exercise, index), ...patch },
+      };
+      if (!selected) return next;
+
+      const logged = loggedFor(selected, exercise.exercise).length;
+      const rows = Math.max(exercise.sets.length, logged + 1);
+      for (let i = index + 1; i < rows; i += 1) {
+        const later = key(exercise.exercise, i);
+        if (i < logged || touched.has(later)) continue;
+        const base = next[later] ?? prescribedRow(exercise.sets[i]);
+        // Weight carries unconditionally; REPS carry only into a row the
+        // program left blank, so a prescribed 12/12/10/8 keeps its taper.
+        next[later] = {
+          weight: patch.weight ?? base.weight,
+          reps: patch.reps !== undefined && base.reps === "" ? patch.reps : base.reps,
+        };
+      }
+      return next;
+    });
 
   /** Save exactly one set. The whole page exists to make this one tap. */
   const saveSet = async (exercise: PrescribedExercise, index: number) => {
@@ -222,7 +268,10 @@ export const LogPage = () => {
                 logged={loggedFor(selected, exercise.exercise)}
                 busy={busy}
                 draftFor={(i) => draftFor(exercise, i)}
-                onChange={(i, patch) => update(exercise, i, patch)}
+                onChange={(i, patch) => {
+                  setTouched((was) => new Set(was).add(key(exercise.exercise, i)));
+                  update(exercise, i, patch);
+                }}
                 onSave={(i) => saveSet(exercise, i)}
                 rowKey={(i) => key(exercise.exercise, i)}
               />

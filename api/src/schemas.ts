@@ -1,3 +1,4 @@
+import { EQUIPMENT, MOVEMENTS } from "@fit/program";
 import { z } from "zod";
 
 /**
@@ -195,3 +196,24 @@ export const historyVolumeQuerySchema = z.object({
  * dataset's own extent, and the UI turns that into presets.
  */
 export const historyWindowSchema = z.object(historyWindowShape);
+
+/**
+ * One curated catalogue entry.
+ *
+ * The WHOLE entry, not a patch: the UI edits one row with every field on
+ * screen, so a partial update would add a merge step that could disagree with
+ * what the editor was looking at.
+ *
+ * `equipment` and `movement` are enums drawn from the program package, so the
+ * two axes cannot drift between the client, the API and the seed data.
+ */
+export const catalogueEntrySchema = z.object({
+  exercise: z.string().trim().min(1).max(120),
+  equipment: z.enum(EQUIPMENT),
+  movement: z.enum(MOVEMENTS),
+  unilateral: z.boolean().optional(),
+  isometric: z.boolean().optional(),
+  bodyweightLoaded: z.boolean().optional(),
+  /** Hidden from pickers without erasing its history (ADR-0013). */
+  retired: z.boolean().optional(),
+});

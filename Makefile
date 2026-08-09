@@ -77,6 +77,22 @@ history: ## Curate reference/*.xlsx into Parquet under reference/history/
 	# explicit `publish-history` target.
 	uv run tools/curate_history.py
 
+.PHONY: strava-status
+strava-status: ## What is cached, what is left, and how much read budget remains
+	uv run tools/strava.py status
+
+.PHONY: strava-pull
+strava-pull: ## One trickle batch of Strava activity data into the local cache
+	# A SIBLING of `ci`, never a dependency: it spends a rate-limited third-party
+	# allowance (100 reads / 15min, 1000 / day). The batch stops itself before the
+	# limit and is safe to re-run — nothing is lost by stopping, and everything
+	# already pulled is in reference/strava/cache.sqlite.
+	uv run tools/strava.py pull
+
+.PHONY: strava-export
+strava-export: ## Cache -> reference/strava/activities.parquet
+	uv run tools/strava.py export
+
 .PHONY: publish-history
 publish-history: ## Upload reference/history/ to ENV's archive bucket
 	bun run tools/publish-history.ts --env $(ENV)

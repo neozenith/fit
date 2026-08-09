@@ -1,20 +1,21 @@
-import type { BlockConfig, Session } from "@fit/program";
-import { useEffect, useState } from "react";
-import { api, type BlockProgress } from "../api.js";
-import { Banner, formatDate, formatShortDate, Loading, repLabel } from "../components.jsx";
+import { blockLabel, generateBlock, type Session, sessionRef } from "@fit/program";
+import { useEffect, useMemo, useState } from "react";
+import { api, type BlockProgress, type BlockSummary } from "../api.js";
+import { Banner, formatDate, formatShortDate, Loading } from "../components.jsx";
+import { useQueryParam } from "../router.jsx";
 
 /**
- * The block at a glance: six weeks, colour-coded, with what is done.
+ * Every block, past and planned, on one timeline.
  *
- * This replaced a page that showed only today's prescription, which answered
- * the least useful question. "Have I got a block? which week am I in? what have
- * I actually completed?" are the things you need before deciding whether to
- * train, and none of them were visible anywhere.
+ * The previous version could show exactly one block — the live one — which made
+ * three ordinary questions unanswerable: what did I do last quarter, do these
+ * two blocks overlap, and what have I planned. A single-block page also had no
+ * way to express a FUTURE block at all, so planning happened outside the app.
  *
- * Completion is DERIVED from logged sets (ADR-0001) — a set carries its own
- * block, week and day, so a session is done when its prescribed exercises have
- * sets against them. Nothing stores a "completed" flag that could disagree with
- * the log.
+ * Blocks are identified by their start date (ADR-0033), so `B-20270810` sorts
+ * chronologically without a comparator and a session is `B-20270810-W5D1`.
+ * Overlap is therefore a visual fact rather than something to work out from two
+ * start dates: bars that intersect are blocks that intersect.
  */
 
 type SessionState = "done" | "partial" | "todo" | "future";
@@ -26,21 +27,16 @@ const STATE_LABEL: Record<SessionState, string> = {
   future: "Upcoming",
 };
 
-/**
- * Which exercises count toward "done".
- *
- * Only those with prescribed SETS. A session's notes and its conditional rules
- * are instructions, not work, and counting them would make every session
- * permanently incomplete.
- */
+const DAY_MS = 86_400_000;
+
 const countable = (session: Session): string[] =>
   session.exercises.filter((e) => e.sets.length > 0).map((e) => e.exercise);
 
 const stateOf = (session: Session, progress: BlockProgress, today: string): SessionState => {
   const logged = progress[`${session.week}-${session.day}`] ?? {};
+  // Complete means every prescribed SET, not merely that the exercise was
+  // touched — counting exercises marked a session done after one set of four.
   const expected = countable(session);
-  // Complete means every prescribed SET is logged, not merely that the exercise
-  // was touched. Counting exercises marked a session done after one set of four.
   const done = session.exercises.filter(
     (e) => e.sets.length > 0 && (logged[e.exercise]?.length ?? 0) >= e.sets.length,
   ).length;
@@ -51,182 +47,238 @@ const stateOf = (session: Session, progress: BlockProgress, today: string): Sess
   return session.date > today ? "future" : "todo";
 };
 
+const SPANS = [
+  { value: "quarter", label: "3 months" },
+  { value: "year", label: "12 months" },
+  { value: "all", label: "All" },
+];
+
 export const OverviewPage = () => {
-  const [block, setBlock] = useState<BlockConfig | null>(null);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [progress, setProgress] = useState<BlockProgress>({});
-  const [blockCount, setBlockCount] = useState(0);
+  const [summaries, setSummaries] = useState<BlockSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [selectedId, setSelected] = useQueryParam("block", "");
+  const [span, setSpan] = useQueryParam("span", "year");
 
   useEffect(() => {
     api
-      .currentBlock()
-      .then((r) => {
-        setBlock(r.block);
-        setSessions(r.sessions);
-        setProgress(r.progress ?? {});
-        setBlockCount(r.blockCount ?? 0);
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
+      .blocks()
+      .then((all) => setSummaries(all.blocks))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
   if (error) return <Banner variant="error">{error}</Banner>;
-  if (loading) return <Loading what="your block" />;
-
-  // The FIRST screen anyone sees, because it is the default route and a fresh
-  // account has no block. It has to teach the program in a paragraph and give
-  // exactly one thing to do — "you have no training block yet" states a fact
-  // and leaves the reader stuck.
-  if (!block) return <NewStarter hasHistory={blockCount > 0} />;
+  if (!summaries) return <Loading what="your blocks" />;
+  if (summaries.length === 0) return <NewStarter />;
 
   const today = new Date().toISOString().slice(0, 10);
-  const weeks = [...new Set(sessions.map((s) => s.week))].sort((a, b) => a - b);
 
-  const currentWeek = sessions.find((s) => s.date >= today)?.week ?? weeks.at(-1) ?? 1;
+  // A year by default, because that is the unit a training plan is thought in
+  // and because the hot window is thirteen months (ADR-0012) — asking for more
+  // would silently return less.
+  const months = span === "all" ? 0 : span === "quarter" ? 3 : 12;
+  const cutoff =
+    months === 0 ? "" : new Date(Date.now() - months * 30 * DAY_MS).toISOString().slice(0, 10);
+  const visible = summaries.filter((s) => months === 0 || s.lastDate >= cutoff);
 
-  const done = sessions.filter((s) => stateOf(s, progress, today) === "done").length;
-  const next = sessions.find((s) => stateOf(s, progress, today) !== "done");
+  const live = visible.filter((s) => s.block.startDate <= today).at(-1) ?? visible.at(0);
+  const selected = visible.find((s) => s.block.blockId === selectedId) ?? live;
+
+  // The timeline's axis: earliest start to latest finish across what is shown.
+  const from = visible.reduce((min, s) => (s.firstDate < min ? s.firstDate : min), "9999-12-31");
+  const to = visible.reduce((max, s) => (s.lastDate > max ? s.lastDate : max), "0000-01-01");
+  const axisFrom = Date.parse(from);
+  const axisSpan = Math.max(1, Date.parse(to) - axisFrom);
+  const position = (date: string) => ((Date.parse(date) - axisFrom) / axisSpan) * 100;
+
+  const totalSessions = visible.reduce((n, s) => n + s.sessionCount, 0);
+  const totalDone = visible.reduce((n, s) => n + s.completeCount, 0);
 
   return (
     <>
       <h1>Overview</h1>
       <p className="muted">
-        Block starting {formatDate(block.startDate)} · {block.units} · {done}/{sessions.length}{" "}
-        sessions complete
-        {blockCount > 1 && <> · {blockCount} blocks recorded</>}
+        {visible.length} block{visible.length === 1 ? "" : "s"} · {totalDone}/{totalSessions}{" "}
+        sessions complete · {formatDate(from)} to {formatDate(to)}
       </p>
 
       <section className="card">
         <div className="row">
-          <div>
-            {/* One line, because the flex row squeezes this column and a
-                wrapped label reads as a rendering fault rather than as prose. */}
-            <div className="muted nowrap">Seed maxes · squat / bench / deadlift</div>
-            <div className="stat-value mono">
-              {block.oneRepMax.squat} / {block.oneRepMax.bench} / {block.oneRepMax.deadlift}
-              {block.units}
+          {/* A real fieldset/legend, like every other filter group in the app.
+              A div with role="group" carries the same meaning through an ARIA
+              attribute that can drift from the element it describes. */}
+          <fieldset className="field">
+            <legend className="field__label">Timeline span</legend>
+            <div className="segmented">
+              {SPANS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={span === option.value}
+                  onClick={() => setSpan(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
-          </div>
+          </fieldset>
           <div className="spacer" />
           <a className="button" href="/block-inputs">
-            Edit or replace this block
+            Plan a block
           </a>
         </div>
-        {next && (
-          <p>
-            Next up:{" "}
-            <strong>
-              Week {next.week}, day {next.day}
-            </strong>{" "}
-            on {formatDate(next.date)}.{" "}
-            <a href={`/log?week=${next.week}&day=${next.day}`}>Log it</a>.
+
+        <div className="timeline">
+          {visible.map((summary) => {
+            const left = position(summary.firstDate);
+            const width = Math.max(1.5, position(summary.lastDate) - left);
+            const pct = summary.sessionCount
+              ? Math.round((summary.completeCount / summary.sessionCount) * 100)
+              : 0;
+            const future = summary.firstDate > today;
+            const active = summary.block.blockId === selected?.block.blockId;
+
+            return (
+              <button
+                key={summary.block.blockId}
+                type="button"
+                className={`timeline__row${active ? " timeline__row--active" : ""}`}
+                aria-pressed={active}
+                title={`${blockLabel(summary.block.blockId)} — ${formatDate(summary.firstDate)} to ${formatDate(summary.lastDate)}, ${summary.completeCount}/${summary.sessionCount} sessions${summary.supersededCount > 0 ? `, ${summary.supersededCount} earlier version${summary.supersededCount === 1 ? "" : "s"}` : ""}`}
+                onClick={() => setSelected(summary.block.blockId)}
+              >
+                <span className="timeline__label mono">{blockLabel(summary.block.blockId)}</span>
+                <span className="timeline__track">
+                  <span
+                    className={`timeline__bar${future ? " timeline__bar--future" : ""}`}
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                  >
+                    <span className="timeline__fill" style={{ width: `${pct}%` }} />
+                  </span>
+                </span>
+                <span className="timeline__meta mono">
+                  {summary.completeCount}/{summary.sessionCount}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="timeline__axis muted mono">
+          <span>{formatShortDate(from)}</span>
+          <span>{formatShortDate(to)}</span>
+        </div>
+
+        {visible.some((s) => s.supersededCount > 0) && (
+          <p className="muted">
+            Some blocks have earlier versions on record. Nothing is edited in place, so every
+            version a block has ever had stays queryable (ADR-0029).
           </p>
         )}
       </section>
 
-      {/* A calendar rather than a list. Six weeks × up to five days is a shape,
-          and seeing the shape is what tells you a whole week went missing —
-          which a chronological list of sessions never does. */}
-      <section className="card">
-        <h2>Six weeks</h2>
-        <div className="calendar">
-          {weeks.map((week) => {
-            const weekSessions = sessions.filter((s) => s.week === week);
-            const title = weekSessions[0]?.weekTitle ?? "";
-            return (
-              <div
-                key={week}
-                className={`calendar__week${week === currentWeek ? " calendar__week--current" : ""}`}
-              >
-                <div className="calendar__label">
-                  <strong>Week {week}</strong>
-                  <span className="muted">{title}</span>
-                </div>
-                <div className="calendar__days">
-                  {weekSessions.map((session) => {
-                    const state = stateOf(session, progress, today);
-                    const logged = progress[`${session.week}-${session.day}`] ?? {};
-                    const expected = countable(session);
-                    const hit = session.exercises.filter(
-                      (e) =>
-                        e.sets.length > 0 && (logged[e.exercise]?.length ?? 0) >= e.sets.length,
-                    ).length;
-                    return (
-                      <a
-                        key={`${session.week}-${session.day}`}
-                        className={`day day--${state}`}
-                        href={`/log?week=${session.week}&day=${session.day}`}
-                        title={`${STATE_LABEL[state]} — ${hit}/${expected.length} exercises`}
-                      >
-                        <span className="day__date">{formatShortDate(session.date)}</span>
-                        <span className="day__name">Day {session.day}</span>
-                        <span className="day__meta">
-                          {hit}/{expected.length}
-                        </span>
-                      </a>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <ul className="legend-list">
-          {(Object.keys(STATE_LABEL) as SessionState[]).map((state) => (
-            <li key={state}>
-              <span className={`swatch swatch--${state}`} aria-hidden="true" />
-              {STATE_LABEL[state]}
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      {next && (
-        <section className="card">
-          <h2>
-            Next session — week {next.week}, day {next.day}
-          </h2>
-          <p className="muted">
-            {next.intensityLabel ? `${next.intensityLabel} · ` : ""}
-            {formatDate(next.date)}
-          </p>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Exercise</th>
-                  <th>Prescribed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {next.exercises.map((exercise) => (
-                  <tr key={exercise.exercise}>
-                    <td>{exercise.exercise}</td>
-                    <td className="mono">
-                      {exercise.sets.length === 0
-                        ? "—"
-                        : exercise.sets
-                            .map(
-                              (set) =>
-                                `${set.weight !== undefined ? `${set.weight}${block.units} ` : ""}${repLabel(set.reps)}`,
-                            )
-                            .join(", ")}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p>
-            <a className="button button--primary" href={`/log?week=${next.week}&day=${next.day}`}>
-              Log this session
-            </a>
-          </p>
-        </section>
-      )}
+      {selected && <BlockDetail summary={selected} today={today} />}
     </>
+  );
+};
+
+/**
+ * One block's six weeks — generated in the browser, for ANY block.
+ *
+ * `generateBlock` is a pure function of the block's seed values (ADR-0001) and
+ * the same module the server runs (ADR-0019), so a historical or planned block
+ * costs one function call rather than a request. An earlier version only had
+ * the LIVE block's sessions in hand and showed a paragraph of summary for every
+ * other one, which made the timeline's rows selectable but not inspectable.
+ */
+const BlockDetail = ({ summary, today }: { summary: BlockSummary; today: string }) => {
+  const { block, progress } = summary;
+  const sessions = useMemo(() => {
+    try {
+      return generateBlock(block);
+    } catch {
+      // A block written before a schema change could fail to generate. A
+      // paragraph beats an error boundary taking the whole page down.
+      return [] as Session[];
+    }
+  }, [block]);
+
+  const weeks = [...new Set(sessions.map((s) => s.week))].sort((a, b) => a - b);
+  const currentWeek = sessions.find((s) => s.date >= today)?.week ?? weeks.at(-1) ?? 1;
+
+  return (
+    <section className="card">
+      <h2>
+        <span className="mono">{blockLabel(block.blockId)}</span>
+        <span className="muted">
+          {" "}
+          · from {formatDate(block.startDate)} · seeds {block.oneRepMax.squat}/
+          {block.oneRepMax.bench}/{block.oneRepMax.deadlift}
+          {block.units}
+        </span>
+      </h2>
+
+      {sessions.length === 0 ? (
+        <p className="muted">
+          {summary.completeCount}/{summary.sessionCount} sessions complete,{" "}
+          {formatDate(summary.firstDate)} to {formatDate(summary.lastDate)}. This block's
+          prescription could not be regenerated from its stored inputs.
+        </p>
+      ) : (
+        <>
+          <div className="calendar">
+            {weeks.map((week) => {
+              const weekSessions = sessions.filter((s) => s.week === week);
+              return (
+                <div
+                  key={week}
+                  className={`calendar__week${week === currentWeek ? " calendar__week--current" : ""}`}
+                >
+                  <div className="calendar__label">
+                    <strong>Week {week}</strong>
+                    <span className="muted">{weekSessions[0]?.weekTitle ?? ""}</span>
+                  </div>
+                  <div className="calendar__days">
+                    {weekSessions.map((session) => {
+                      const state = stateOf(session, progress, today);
+                      const logged = progress[`${session.week}-${session.day}`] ?? {};
+                      const expected = countable(session);
+                      const hit = session.exercises.filter(
+                        (e) =>
+                          e.sets.length > 0 && (logged[e.exercise]?.length ?? 0) >= e.sets.length,
+                      ).length;
+                      const ref = sessionRef(block.blockId, session.week, session.day);
+                      return (
+                        <a
+                          key={ref}
+                          className={`day day--${state}`}
+                          href={`/log?week=${session.week}&day=${session.day}`}
+                          // The session reference is both the tooltip and the
+                          // thing to quote when talking about one session.
+                          title={`${ref} — ${STATE_LABEL[state]}, ${hit}/${expected.length} exercises`}
+                        >
+                          <span className="day__date">{formatShortDate(session.date)}</span>
+                          <span className="day__name">Day {session.day}</span>
+                          <span className="day__meta">
+                            {hit}/{expected.length}
+                          </span>
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <ul className="legend-list">
+            {(Object.keys(STATE_LABEL) as SessionState[]).map((state) => (
+              <li key={state}>
+                <span className={`swatch swatch--${state}`} aria-hidden="true" />
+                {STATE_LABEL[state]}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
   );
 };
 
@@ -238,7 +290,7 @@ export const OverviewPage = () => {
  * anyone meets — "you have no training block yet" states a fact and leaves the
  * reader stuck, which is what it replaced.
  */
-const NewStarter = ({ hasHistory }: { hasHistory: boolean }) => (
+const NewStarter = () => (
   <>
     <h1>Start here</h1>
     <p className="muted">
@@ -296,14 +348,14 @@ const NewStarter = ({ hasHistory }: { hasHistory: boolean }) => (
     <section className="card">
       <h2>While you are here</h2>
       <p className="muted">
-        {hasHistory
-          ? "You have blocks on record but none running — the inputs page starts a new one from your most recent estimates."
-          : "Nothing is logged yet, so most pages will be empty until you train. These work from day one."}
+        Nothing is logged yet, so most pages will be empty until you train. These work from day one.
       </p>
       <ul className="linklist">
         <li>
           <a href="/exercises">Exercises</a>{" "}
-          <span className="muted">— every movement the app knows about.</span>
+          <span className="muted">
+            — every movement the app knows about, and where you curate it.
+          </span>
         </li>
         <li>
           <a href="/measurements">Body</a>{" "}

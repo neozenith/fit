@@ -35,6 +35,10 @@ locals {
       description = "The hand-authored season plan: which week is which block."
       ages_out    = false
     }
+    catalogue = {
+      description = "Curated exercise definitions: equipment and movement category."
+      ages_out    = false
+    }
   }
 }
 

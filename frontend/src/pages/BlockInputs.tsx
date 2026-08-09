@@ -1,17 +1,17 @@
 import {
-  ACCESSORY_OPTIONS,
   type AccessoryChoices,
   type BlockConfig,
   DEFAULT_ACCESSORIES,
   generateBlock,
-  mergeExerciseNames,
+  MOVEMENT_LABEL,
+  type Movement,
   type Session,
+  SLOT_MOVEMENT,
 } from "@fit/program";
 import { useEffect, useMemo, useState } from "react";
-import { api, type PersonalBest } from "../api.js";
-import { useCatalogue } from "../catalogue.js";
+import { api, type CuratedExercise, type PersonalBest } from "../api.js";
 import { Combobox } from "../combobox.jsx";
-import { Banner, formatDate, formatShortDate, Loading } from "../components.jsx";
+import { Banner, formatDate, formatShortDate, Loading, repLabel } from "../components.jsx";
 import { navigate } from "../router.jsx";
 
 /**
@@ -37,42 +37,26 @@ const LIFTS = [
 ] as const;
 
 /**
- * The accessory slots, and where each one's suggestions come from.
+ * The accessory slots.
  *
- * The four `ACCESSORY_OPTIONS` slots are the program's own prescribed menus.
- * The four OPTIONAL slots — the spreadsheet's "Optional Exercise 1/2" and
- * "Optional Lower Body 1/2" — were free text on the Inputs sheet, so they offer
- * the canonical exercise list instead.
+ * Their options come from the CATALOGUE, filtered by the movement each slot
+ * requires (`SLOT_MOVEMENT`). The hardcoded four-string menu each prescribed
+ * slot used to carry was a second source of truth, and it showed: Romanian
+ * Deadlift is in the log five times and is unambiguously a hinge, yet could not
+ * be picked as a deadlift variation because it was not one of the four strings.
+ *
+ * The optional slots require no particular movement and so offer everything —
+ * which is what the spreadsheet's free-text fields meant.
  */
-const SLOTS: Array<{
-  key: keyof AccessoryChoices;
-  label: string;
-  hint: string;
-  menu: keyof typeof ACCESSORY_OPTIONS | "catalogue";
-}> = [
-  {
-    key: "upperBackHorizontal",
-    label: "Upper back — horizontal pull",
-    hint: "Prescribed slot",
-    menu: "upperBackHorizontal",
-  },
-  { key: "shoulder", label: "Shoulder", hint: "Prescribed slot", menu: "shoulder" },
-  {
-    key: "upperBackVertical",
-    label: "Upper back — vertical pull",
-    hint: "Prescribed slot",
-    menu: "upperBackVertical",
-  },
-  {
-    key: "deadliftVariation",
-    label: "Deadlift variation",
-    hint: "Prescribed slot",
-    menu: "deadliftVariation",
-  },
-  { key: "optional1", label: "Optional exercise 1", hint: "Your choice", menu: "catalogue" },
-  { key: "optional2", label: "Optional exercise 2", hint: "Your choice", menu: "catalogue" },
-  { key: "optionalLower1", label: "Optional lower body 1", hint: "Your choice", menu: "catalogue" },
-  { key: "optionalLower2", label: "Optional lower body 2", hint: "Your choice", menu: "catalogue" },
+const SLOTS: Array<{ key: keyof AccessoryChoices; label: string }> = [
+  { key: "upperBackHorizontal", label: "Upper back — horizontal pull" },
+  { key: "shoulder", label: "Shoulder" },
+  { key: "upperBackVertical", label: "Upper back — vertical pull" },
+  { key: "deadliftVariation", label: "Deadlift variation" },
+  { key: "optional1", label: "Optional exercise 1" },
+  { key: "optional2", label: "Optional exercise 2" },
+  { key: "optionalLower1", label: "Optional lower body 1" },
+  { key: "optionalLower2", label: "Optional lower body 2" },
 ];
 
 export const BlockInputsPage = () => {
@@ -82,7 +66,8 @@ export const BlockInputsPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { exercises: catalogue } = useCatalogue();
+  const [catalogue, setCatalogue] = useState<CuratedExercise[]>([]);
+  const [inspecting, setInspecting] = useState<string | null>(null);
 
   const [draft, setDraft] = useState({
     startDate: new Date().toISOString().slice(0, 10),
@@ -93,6 +78,15 @@ export const BlockInputsPage = () => {
     accessories: DEFAULT_ACCESSORIES as AccessoryChoices,
   });
   const [seeded, setSeeded] = useState(false);
+
+  useEffect(() => {
+    api
+      .catalogue()
+      .then((r) => setCatalogue(r.exercises))
+      // A catalogue that will not load leaves the pickers empty but still
+      // typeable; the page's own error surface is for failures that block work.
+      .catch(() => setCatalogue([]));
+  }, []);
 
   useEffect(() => {
     Promise.all([api.currentBlock(), api.progress()])
@@ -185,8 +179,18 @@ export const BlockInputsPage = () => {
   if (loading) return <Loading what="your block inputs" />;
 
   const replacing = current !== null && current.startDate === draft.startDate;
-  const names = mergeExerciseNames(catalogue.map((e) => e.exercise));
   const weeks = [...new Set(preview.map((s) => s.week))].sort((a, b) => a - b);
+
+  /** Everything the catalogue offers for a slot, given the movement it needs. */
+  const optionsFor = (slot: keyof AccessoryChoices): string[] => {
+    const movement = SLOT_MOVEMENT[slot] ?? null;
+    return catalogue
+      .filter((e) => !e.retired && (movement === null || e.movement === movement))
+      .map((e) => e.exercise)
+      .sort((a, b) => a.localeCompare(b));
+  };
+
+  const inspected = preview.find((s) => `${s.week}-${s.day}` === inspecting);
 
   return (
     <>
@@ -281,22 +285,32 @@ export const BlockInputsPage = () => {
           the program's own menus. Every field also accepts anything you type.
         </p>
         <div className="grid">
-          {SLOTS.map((slot) => (
-            <Combobox
-              key={slot.key}
-              id={`slot-${slot.key}`}
-              label={
-                <>
-                  {slot.label} <span className="muted">— {slot.hint}</span>
-                </>
-              }
-              value={draft.accessories[slot.key]}
-              options={slot.menu === "catalogue" ? names : [...ACCESSORY_OPTIONS[slot.menu]]}
-              onChange={(value) => setAccessory(slot.key, value)}
-              placeholder="Search or type"
-            />
-          ))}
+          {SLOTS.map((slot) => {
+            const movement = SLOT_MOVEMENT[slot.key] ?? null;
+            return (
+              <Combobox
+                key={slot.key}
+                id={`slot-${slot.key}`}
+                label={
+                  <>
+                    {slot.label}{" "}
+                    <span className="muted">
+                      — {movement ? MOVEMENT_LABEL[movement as Movement] : "any movement"}
+                    </span>
+                  </>
+                }
+                value={draft.accessories[slot.key]}
+                options={optionsFor(slot.key)}
+                onChange={(value) => setAccessory(slot.key, value)}
+                placeholder="Search or type"
+              />
+            );
+          })}
         </div>
+        <p className="muted">
+          Options come from the <a href="/exercises">exercise catalogue</a>, filtered by the
+          movement each slot needs. Curate an exercise there and it appears here.
+        </p>
       </section>
 
       {/* The preview lives HERE rather than only on the overview, because the
@@ -322,20 +336,75 @@ export const BlockInputsPage = () => {
                       <span className="muted">{weekSessions[0]?.weekTitle ?? ""}</span>
                     </div>
                     <div className="calendar__days">
-                      {weekSessions.map((session) => (
-                        <div className="day day--future" key={`${session.week}-${session.day}`}>
-                          <span className="day__date">{formatShortDate(session.date)}</span>
-                          <span className="day__name">Day {session.day}</span>
-                          <span className="day__meta">
-                            {session.exercises.filter((e) => e.sets.length > 0).length} exercises
-                          </span>
-                        </div>
-                      ))}
+                      {weekSessions.map((session) => {
+                        const id = `${session.week}-${session.day}`;
+                        return (
+                          <button
+                            type="button"
+                            className={`day day--future${inspecting === id ? " day--active" : ""}`}
+                            key={id}
+                            aria-pressed={inspecting === id}
+                            onClick={() => setInspecting(inspecting === id ? null : id)}
+                          >
+                            <span className="day__date">{formatShortDate(session.date)}</span>
+                            <span className="day__name">Day {session.day}</span>
+                            <span className="day__meta">
+                              {session.exercises.filter((e) => e.sets.length > 0).length} exercises
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 );
               })}
             </div>
+            {/* The squares were previously inert, which made the preview a
+                shape and not an inspection: you could see that week 3 has four
+                days without seeing what any of them prescribe. */}
+            {inspected ? (
+              <div className="session-detail">
+                <h3>
+                  Week {inspected.week}, day {inspected.day}
+                  <span className="muted"> · {formatDate(inspected.date)}</span>
+                </h3>
+                {inspected.intensityLabel && <p className="muted">{inspected.intensityLabel}</p>}
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Exercise</th>
+                        <th>Prescribed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inspected.exercises.map((exercise) => (
+                        <tr key={exercise.exercise}>
+                          <td>{exercise.exercise}</td>
+                          <td className="mono">
+                            {exercise.sets.length === 0
+                              ? "—"
+                              : exercise.sets
+                                  .map(
+                                    (set) =>
+                                      `${set.weight !== undefined ? `${set.weight}${draft.units} ` : ""}${repLabel(set.reps)}`,
+                                  )
+                                  .join(", ")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {inspected.notes.map((note) => (
+                  <p key={note} className="muted">
+                    {note}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="muted">Select a day to see exactly what it prescribes.</p>
+            )}
           </>
         )}
       </section>

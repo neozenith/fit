@@ -33,10 +33,10 @@ const hasBlock = async (page: Page): Promise<boolean> => {
   // Decided from the OVERVIEW's two settled states, and waited for. An
   // immediate count races the load and reports "no block" on an environment
   // that has one — which then silently skips every assertion below it.
-  const calendar = page.getByRole("heading", { name: "Six weeks" });
+  const timeline = page.locator(".timeline__row").first();
   const empty = page.getByRole("heading", { name: "How it works" });
-  await expect(calendar.or(empty).first()).toBeVisible();
-  return calendar.isVisible();
+  await expect(timeline.or(empty).first()).toBeVisible();
+  return timeline.isVisible();
 };
 
 /**
@@ -120,7 +120,6 @@ test.describe("shell", () => {
       "/history/volume",
       "/history/rep-maxes",
       "/history/cardio",
-      "/history/streaks",
     ]) {
       await page.goto(path);
       await expect(page.locator("main h1")).toBeVisible();
@@ -140,7 +139,9 @@ test.describe("overview", () => {
     // none. An empty page is the failure being guarded against.
     const has = await hasBlock(page);
     if (has) {
-      await expect(page.getByRole("heading", { name: "Six weeks" })).toBeVisible();
+      // A timeline of every block, not one block's calendar. "Do these two
+      // overlap" and "what have I planned" were unanswerable before.
+      await expect(page.locator(".timeline__row").first()).toBeVisible();
     } else {
       // The empty state is the FIRST screen a new account sees, since this is
       // the default route. It has to teach the program and give exactly one
@@ -155,8 +156,8 @@ test.describe("overview", () => {
     await page.goto("/overview");
     test.skip(!(await hasBlock(page)), "environment has no block yet");
 
-    const days = page.locator(".calendar .day");
-    expect(await days.count()).toBeGreaterThan(0);
+    const days = page.locator(".calendar a.day");
+    test.skip((await days.count()) === 0, "the selected block's sessions are not loaded");
 
     // Every tile is addressable. That is what makes "log week 3 day 2" a link
     // rather than an instruction to click around until you find it.
@@ -168,11 +169,34 @@ test.describe("overview", () => {
     await page.goto("/overview");
     test.skip(!(await hasBlock(page)), "environment has no block yet");
 
+    const days = page.locator(".calendar a.day");
+    test.skip((await days.count()) === 0, "the selected block's sessions are not loaded");
+
     // Each tile carries an `n/m` count and a title as well as its colour.
     // Colour-only status fails anyone who cannot distinguish the hues, and it
-    // fails everyone in a screenshot pasted into a message.
-    const first = page.locator(".calendar .day").first();
-    await expect(first).toHaveAttribute("title", /\d+\/\d+ exercises/);
+    // fails everyone in a screenshot pasted into a message. The title also
+    // carries the session REFERENCE, which is the thing to quote when talking
+    // about one specific session.
+    await expect(days.first()).toHaveAttribute("title", /\d+\/\d+ exercises/);
+  });
+
+  test("selecting a block writes it to the URL", async ({ page }) => {
+    await page.goto("/overview");
+    test.skip(!(await hasBlock(page)), "environment has no block yet");
+
+    await page.locator(".timeline__row").first().click();
+    await expect(page).toHaveURL(/[?&]block=/);
+  });
+
+  test("the timeline span is a filter like any other", async ({ page }) => {
+    await page.goto("/overview");
+    test.skip(!(await hasBlock(page)), "environment has no block yet");
+
+    await page
+      .getByRole("group", { name: "Timeline span" })
+      .getByRole("button", { name: "All" })
+      .click();
+    await expect(page).toHaveURL(/[?&]span=all/);
   });
 });
 
@@ -246,6 +270,35 @@ test.describe("block inputs", () => {
     expect(await page.locator(".calendar .day").count()).toBeGreaterThan(10);
   });
 
+  test("a previewed session can be opened to see what it prescribes", async ({ page }) => {
+    await page.goto("/block-inputs");
+    const day = page.locator(".calendar .day").first();
+    await expect(day).toBeVisible();
+
+    // The squares were inert, which made the preview a shape and not an
+    // inspection: you could see week 3 has four days without seeing what any
+    // of them ask for.
+    await day.click();
+    const detail = page.locator(".session-detail");
+    await expect(detail).toBeVisible();
+    await expect(detail.locator("table tbody tr").first()).toBeVisible();
+  });
+
+  test("the deadlift slot offers every hinge, not a hardcoded four", async ({ page }) => {
+    await page.goto("/block-inputs");
+    const field = page.locator("#slot-deadliftVariation");
+    const combobox = page.locator(".combobox").filter({ has: field });
+
+    await combobox.getByRole("button", { name: "Show all options" }).click();
+    const options = combobox.getByRole("option");
+
+    // Romanian Dead Lift is in the log five times and is unambiguously a hinge,
+    // and it was unpickable here because the slot carried a literal of four
+    // strings. Its presence is the proof the picker reads the catalogue.
+    await expect(options.filter({ hasText: "Romanian Dead Lift" })).toHaveCount(1);
+    expect(await options.count()).toBeGreaterThan(4);
+  });
+
   test("names replacement as replacement, not as an edit", async ({ page }) => {
     await page.goto("/block-inputs");
     // Storage is append-only (ADR-0013), so there is no edit and no delete. The
@@ -292,6 +345,7 @@ test.describe("log", () => {
     // extra-set row, so the click lands but has no prescribed reps to save and
     // the count correctly does not move.
     const row = page.locator(".exercise-row:not(.exercise-row--logged)").first();
+    await expect(row.or(page.getByText(/no training block/i)).first()).toBeVisible();
     test.skip(!(await row.isVisible()), "every exercise in this session is complete");
 
     const tick = row.locator(".set-row:not(.set-row--done) .set-row__save").first();
@@ -363,6 +417,49 @@ test.describe("log", () => {
     await expect
       .poll(async () => exercise.locator(".set-row--done").count())
       .toBeGreaterThan(before);
+  });
+});
+
+test.describe("exercise catalogue", () => {
+  test("classifies every movement on both axes", async ({ page }) => {
+    await page.goto("/exercises");
+    await expect(page.locator("main h1")).toHaveText("Exercises");
+
+    const first = page.locator("table tbody tr").first();
+    // Equipment answers "what do I need"; movement answers "what does this
+    // train". The accessory pickers read the second one, which is why both
+    // have to be editable rather than inferred from the name.
+    await expect(first.getByRole("combobox").first()).toBeVisible();
+    expect(await first.getByRole("combobox").count()).toBe(2);
+  });
+
+  test("an edit is persisted and marked as curated", async ({ page }, testInfo) => {
+    // LOCAL ONLY: this writes a curation override, and the catalogue is shared
+    // state for every picker in the environment.
+    test.skip(testInfo.project.name !== "local", "writes curation state");
+
+    await page.goto("/exercises?sort=name");
+    const row = page.locator("table tbody tr").first();
+    const name = (await row.locator("td").first().innerText()).split("\n")[0]?.trim() ?? "";
+    const movement = row.getByRole("combobox").nth(1);
+
+    const before = await movement.inputValue();
+    const next = before === "core" ? "other" : "core";
+    await movement.selectOption(next);
+
+    await page.reload();
+    const reloaded = page
+      .locator("table tbody tr")
+      .filter({ hasText: name })
+      .first()
+      .getByRole("combobox")
+      .nth(1);
+    await expect(reloaded).toHaveValue(next);
+    // A curated entry is marked, so shipped defaults and deliberate choices are
+    // distinguishable at a glance.
+    await expect(page.locator("table tbody tr").filter({ hasText: name }).first()).toContainText(
+      "curated",
+    );
   });
 });
 
@@ -462,7 +559,6 @@ test.describe("imported history", () => {
     const pages: Array<[string, string]> = [
       ["/history/volume", "Volume"],
       ["/history/cardio", "Cardio"],
-      ["/history/streaks", "Streaks"],
     ];
 
     for (const [path, heading] of pages) {
@@ -620,6 +716,21 @@ test.describe("presentation", () => {
     if (await drawer.isVisible()) await drawer.click();
     await expect(page.locator("#sidenav").getByRole("group", { name: "Theme" })).toBeVisible();
     await expect(page.locator(".topbar").getByRole("group", { name: "Theme" })).toHaveCount(0);
+  });
+
+  test("the header carries block, week and session progress", async ({ page }) => {
+    await page.goto("/overview");
+    const bars = page.locator(".header-progress progress");
+    const hasBlockNow = await hasBlock(page);
+    test.skip(!hasBlockNow, "environment has no block yet");
+    test.skip(!(await bars.first().isVisible()), "viewport too narrow for the header bars");
+
+    // Three, and exactly three: block, week, session. They are different
+    // denominators, which is why they are three bars and not one.
+    expect(await bars.count()).toBe(3);
+    for (const bar of await bars.all()) {
+      expect(Number(await bar.getAttribute("max"))).toBeGreaterThan(0);
+    }
   });
 
   test("charts render as SVG, not as an empty container", async ({ page }) => {

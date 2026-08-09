@@ -1,5 +1,6 @@
 import {
   type BlockConfig,
+  blockId as blockIdFor,
   DEFAULT_ACCESSORIES,
   estimatedOneRepMax,
   expandSeason,
@@ -12,6 +13,7 @@ import {
   weeklyMedians,
 } from "@fit/program";
 import { z } from "zod";
+import { curateExercise, listCatalogue } from "./catalogue.js";
 import { ENVIRONMENT } from "./const.js";
 import { finopsRecency, queryFinops } from "./finops.js";
 import {
@@ -27,6 +29,7 @@ import {
 import { type Identity, UnauthenticatedError, userKey, verifyIdentity } from "./identity.js";
 import { type Item, putItem, putItems, queryByType, sortKey } from "./repo.js";
 import {
+  catalogueEntrySchema,
   createBlockSchema,
   finopsQuerySchema,
   historyVolumeQuerySchema,
@@ -66,11 +69,6 @@ const nowIso = (): string => new Date().toISOString();
 
 // --- Handlers ----------------------------------------------------------------
 
-const getBlocks = async (ctx: Context): Promise<Response> => {
-  const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");
-  return json({ blocks: items.map(stripKeys) });
-};
-
 const stripKeys = <T>(item: T & Item): T => {
   const { pk: _pk, sk: _sk, ...rest } = item;
   // The cast is safe and necessary: `Item`'s index signature makes `Omit`
@@ -81,10 +79,13 @@ const stripKeys = <T>(item: T & Item): T => {
 
 const createBlock = async (ctx: Context, body: unknown): Promise<Response> => {
   const input = createBlockSchema.parse(body);
-  const blockId = newId();
+  // The identity IS the start date (ADR-0033). Two blocks starting the same day
+  // are the same block, so supersede falls out of the key rather than being
+  // enforced beside it — and a plain string sort is chronological order.
+  const id = blockIdFor(input.startDate);
 
   const config: BlockConfig = {
-    blockId,
+    blockId: id,
     startDate: input.startDate,
     units: input.units,
     oneRepMax: input.oneRepMax,
@@ -105,7 +106,7 @@ const createBlock = async (ctx: Context, body: unknown): Promise<Response> => {
     // Sorted by START DATE rather than creation time, so "the current block" is
     // a query against the calendar rather than against when someone happened to
     // type it in. A block created today for next month must not sort as current.
-    sk: sortKey("BLOCK", input.startDate, blockId),
+    sk: sortKey("BLOCK", input.startDate, id),
     ...config,
     createdAt: nowIso(),
     createdBy: ctx.identity.actor,
@@ -212,6 +213,68 @@ interface LoggedSet {
   weight?: number;
   setIndex?: number;
 }
+
+/**
+ * Every block, with its own progress — the input to the year view.
+ *
+ * One `sets` query for all of them rather than one per block: the hot window is
+ * thirteen months (ADR-0012), so the whole training year is a single partition
+ * read, and N queries would be N round trips to slice data already in memory.
+ */
+const getBlocks = async (ctx: Context): Promise<Response> => {
+  const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");
+
+  // Newest write wins per identity. Superseded versions stay in the table and
+  // stay queryable; they simply are not the block any more.
+  const latest = new Map<string, BlockConfig & Item>();
+  for (const item of items) {
+    const existing = latest.get(item.blockId);
+    const newer =
+      !existing ||
+      String((item as { createdAt?: string }).createdAt ?? "").localeCompare(
+        String((existing as { createdAt?: string }).createdAt ?? ""),
+      ) > 0;
+    if (newer) latest.set(item.blockId, item);
+  }
+
+  const logged = (
+    await queryByType<SetRecord>("sets", userKey(ctx.identity), "SET", {
+      limit: 4000,
+    })
+  ).map(stripKeys) as SetRecord[];
+
+  const blocks = [...latest.values()]
+    .map((item) => {
+      const config = stripKeys(item) as BlockConfig;
+      const sessions = generateBlock(config);
+      const progress = sessionProgress(logged, config.blockId);
+      const complete = sessions.filter((session) => {
+        const expected = session.exercises.filter((e) => e.sets.length > 0);
+        return (
+          expected.length > 0 &&
+          expected.every(
+            (e) =>
+              (progress[`${session.week}-${session.day}`]?.[e.exercise]?.length ?? 0) >=
+              e.sets.length,
+          )
+        );
+      }).length;
+
+      return {
+        block: config,
+        progress,
+        sessionCount: sessions.length,
+        completeCount: complete,
+        firstDate: sessions[0]?.date ?? config.startDate,
+        lastDate: sessions.at(-1)?.date ?? config.startDate,
+        supersededCount: items.filter((i) => i.blockId === config.blockId).length - 1,
+      };
+    })
+    // Chronological, which for these identifiers is also lexicographic.
+    .sort((a, b) => a.block.blockId.localeCompare(b.block.blockId));
+
+  return json({ blocks });
+};
 
 const getCurrentBlock = async (ctx: Context): Promise<Response> => {
   const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");
@@ -446,6 +509,23 @@ const ROUTES: Route[] = [
     handle: async (ctx, req) => putSeason(ctx, await req.json()),
   },
   { method: "GET", pattern: /^\/api\/progress$/, handle: (ctx) => getProgress(ctx) },
+  // --- The curated catalogue --------------------------------------------------
+  // The app's single source of truth for what a movement IS. Accessory pickers
+  // read it, so curating an entry immediately changes what can be prescribed.
+  {
+    method: "GET",
+    pattern: /^\/api\/catalogue$/,
+    handle: async (ctx) => json({ exercises: await listCatalogue(ctx.identity) }),
+  },
+  {
+    method: "PUT",
+    pattern: /^\/api\/catalogue$/,
+    handle: async (ctx, req) =>
+      json({
+        exercise: await curateExercise(ctx.identity, catalogueEntrySchema.parse(await req.json())),
+      }),
+  },
+
   // --- Imported history ------------------------------------------------------
   // Read-only, derived in SQL from the curated Parquet. No writes: the import
   // is an operator action (tools/publish-history.ts), never a request.

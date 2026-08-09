@@ -11,7 +11,7 @@
 # backend credentials.
 
 data "aws_ssm_parameter" "table_arn" {
-  for_each = toset(["blocks", "sets", "measurements", "cardio", "season"])
+  for_each = toset(["blocks", "sets", "measurements", "cardio", "season", "catalogue"])
   name     = "/${local.app_name}/${var.environment}/data/table/${each.key}"
 }
 

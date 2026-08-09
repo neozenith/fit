@@ -1177,3 +1177,199 @@ button:disabled {
 .nowrap {
   white-space: nowrap;
 }
+
+/* --- Header progress --------------------------------------------------------- */
+
+/* Equal thirds, deliberately. Block, week and session have different
+   denominators — 21 sessions, 5 sessions, 24 sets — so any shared scale would
+   be a lie. Equal widths say "three separate fractions". */
+.header-progress {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s3);
+  flex: 1 1 22rem;
+  min-width: 0;
+  max-width: 34rem;
+  margin: 0 var(--s4);
+}
+
+.header-progress__item {
+  min-width: 0;
+}
+
+.header-progress__label {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-size: 0.68rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* A native `progress` element carries the semantics, the value and the maximum
+   with no ARIA, and a screen reader announces a percentage from it for free.
+   The appearance has to be reset per engine because the default is a platform
+   widget that ignores every colour token. */
+.header-progress__bar {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
+  height: 5px;
+  border: 0;
+  border-radius: var(--pill);
+  background: var(--border);
+  overflow: hidden;
+}
+
+.header-progress__bar::-webkit-progress-bar {
+  background: var(--border);
+}
+
+.header-progress__bar::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--pill);
+}
+
+.header-progress__bar::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--pill);
+}
+
+@media (max-width: 60rem) {
+  /* Below this the header is already wrapping; three bars would take a whole
+     row from content on a phone to show what the overview shows better. */
+  .header-progress {
+    display: none;
+  }
+}
+
+/* --- The block timeline ------------------------------------------------------ */
+
+/* One row per block on a shared date axis, so OVERLAP is something you see
+   rather than something you work out from two start dates. */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  margin-top: var(--s4);
+}
+
+.timeline__row {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr) 3.5rem;
+  gap: var(--s3);
+  align-items: center;
+  padding: var(--s1) var(--s2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline__row:hover {
+  background: var(--bg);
+}
+
+.timeline__row--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.timeline__label,
+.timeline__meta {
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.timeline__meta {
+  text-align: right;
+  color: var(--muted);
+}
+
+.timeline__track {
+  position: relative;
+  display: block;
+  height: 1.4rem;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+
+.timeline__bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 1px solid var(--accent);
+  overflow: hidden;
+}
+
+/* A planned block is drawn hollow. It has no completion to report, and filling
+   it would claim work that has not happened. */
+.timeline__bar--future {
+  background: transparent;
+  border-style: dashed;
+}
+
+.timeline__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.timeline__axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  padding: 0 4rem 0 8rem;
+}
+
+@media (max-width: 40rem) {
+  .timeline__row {
+    grid-template-columns: 5.5rem minmax(0, 1fr) 3rem;
+  }
+  .timeline__axis {
+    padding: 0;
+  }
+}
+
+/* --- Catalogue curation ------------------------------------------------------ */
+
+.traits {
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  white-space: nowrap;
+}
+
+.traits label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* A saving row dims rather than disappearing: the edit is a `<select>` change
+   and removing the control mid-interaction loses focus and the caret. */
+.row--saving {
+  opacity: 0.55;
+}
+
+/* --- Session inspector ------------------------------------------------------- */
+
+.session-detail {
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--border);
+}

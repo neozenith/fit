@@ -1075,3 +1075,76 @@ would fight the ARIA ones.
 
 > **Lens.** A control that permits anything still has to SHOW what is expected.
 > Accepting free text is a capability; discovering the options is the feature.
+
+## ADR-0033 — A block's identity is its start date
+
+**Status:** Accepted — replaces the UUID, and subsumes ADR-0029's tie-break
+
+**Context.** Blocks were identified by a UUID. That made two things awkward and
+one thing wrong.
+
+Awkward: a block had no name anyone could say, and sorting a list of them
+required carrying the start date alongside and comparing on that instead.
+
+Wrong: ADR-0029 established that creating a block with an existing start date
+**supersedes** it, and the resolution was "latest start date, tie-broken by
+latest write". The tie-break was necessary only because two blocks with the same
+start date had different identities. Before that fix the winner was whichever
+UUID sorted last — effectively random.
+
+**Decision.** `blockId = B-YYYYMMDD`, derived from the start date.
+
+- **It sorts.** Plain lexicographic order is chronological order, so a list, a
+  DynamoDB range query and a `.sort()` all agree with no comparator.
+- **Supersede falls out of the key.** Two blocks starting the same day now have
+  the same identity, which is what "the same block, corrected" always meant. The
+  tie-break stays as a `createdAt` comparison between versions of one id, which
+  is a much smaller claim.
+- **A session is addressable**: `B-20270810-W5D1` names one session, in a
+  message, without a link.
+
+The display form spells the month — `B-2027AUG10` — because `B-20270810` is
+unreadable at a glance and `2027-08-10` reintroduces the day/month ambiguity
+this app already removed from its date formatting.
+
+**Consequences.** Blocks created before this keep their UUIDs; storage is
+append-only so they cannot be rewritten, and every helper passes an unrecognised
+identifier through unchanged rather than rendering a lie.
+
+> **Lens.** When an entity has a natural key, use it. A surrogate id buys
+> uniqueness you already had and costs you ordering, readability, and — here —
+> a correctness rule that had to be enforced separately.
+
+## ADR-0034 — The curated catalogue is the single source of truth
+
+**Status:** Accepted — supersedes the canonical list of ADR-0032
+
+**Context.** What an exercise *is* was defined in three places: a hardcoded menu
+per accessory slot, a canonical list transcribed from the Google Form, and the
+classifications derived during history curation. They disagreed, and the
+disagreement was visible — Romanian Deadlift appears in the log five times and
+is unambiguously a hinge, and it could not be picked as a deadlift variation
+because that slot's menu was a literal of four strings.
+
+**Decision.** One catalogue, stored and curated, on **two axes**:
+
+- **Equipment** — "what do I need". The axis history is filtered by.
+- **Movement** — "what does this train". The axis a prescribed accessory slot is
+  filled from: the program asks for a horizontal pull, and which one is the
+  athlete's choice.
+
+A slot declares the movement it requires (`SLOT_MOVEMENT`) and its picker is the
+catalogue filtered by that. There is no per-slot list left to go stale.
+
+A **seed** ships in the program package so a fresh environment is useful before
+anyone curates anything; stored entries override it by name, lower-cased so
+"Barbell row" and "Barbell Row" cannot split one movement's history in two.
+
+**Consequences.** `/exercises` stopped being a read-only report and became the
+place the app is configured — editing a row immediately changes what can be
+prescribed. Movement had to be a real classification rather than something
+inferred from the name, because prefix-matching a name is exactly the guessing
+this replaced.
+
+> **Lens.** When a value is consulted from three places, it has three
+> definitions. Make it data with one home before adding a fourth reader.

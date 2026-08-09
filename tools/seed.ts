@@ -15,7 +15,7 @@ import {
   ResourceNotFoundException,
 } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
-import { DEFAULT_ACCESSORIES, planSeason } from "@fit/program";
+import { blockId, DEFAULT_ACCESSORIES, planSeason } from "@fit/program";
 
 const ENDPOINT = process.env["DYNAMODB_ENDPOINT"] ?? "http://localhost:8000";
 const PREFIX = process.env["TABLE_PREFIX"] ?? "fit-local";
@@ -28,7 +28,7 @@ const raw = new DynamoDBClient({
 });
 const db = DynamoDBDocumentClient.from(raw, { marshallOptions: { removeUndefinedValues: true } });
 
-const TABLES = ["blocks", "sets", "measurements", "cardio", "season"] as const;
+const TABLES = ["blocks", "sets", "measurements", "cardio", "season", "catalogue"] as const;
 
 const ensureTable = async (logical: string): Promise<void> => {
   const TableName = `${PREFIX}-${logical}`;
@@ -80,12 +80,14 @@ const main = async (): Promise<void> => {
   for (const logical of TABLES) await ensureTable(logical);
 
   const startDate = blockStart();
-  const blockId = "seed-block-1";
+  // The identity IS the start date (ADR-0033) — no separate id to invent, and
+  // a plain string sort over these is chronological order.
+  const currentId = blockId(startDate);
 
   await put("blocks", {
     pk,
-    sk: `BLOCK#${startDate}#${blockId}`,
-    blockId,
+    sk: `BLOCK#${startDate}#${currentId}`,
+    blockId: currentId,
     startDate,
     units: "kg",
     // The source workbook's own seeds, so a local run reproduces exactly the
@@ -95,6 +97,31 @@ const main = async (): Promise<void> => {
     createdAt: new Date().toISOString(),
     createdBy: "seed",
   });
+
+  // A PAST block and a PLANNED one, so the overview's timeline has more than a
+  // single bar to show. Without them the multi-block view is indistinguishable
+  // from the single-block page it replaced, and overlap cannot be seen at all.
+  const shift = (iso: string, days: number): string =>
+    new Date(Date.parse(iso) + days * 86_400_000).toISOString().slice(0, 10);
+
+  for (const [offsetDays, maxes] of [
+    [-56, { bench: 37.5, squat: 65, deadlift: 75 }],
+    [+56, { bench: 42.5, squat: 75, deadlift: 85 }],
+  ] as const) {
+    const date = shift(startDate, offsetDays);
+    const id = blockId(date);
+    await put("blocks", {
+      pk,
+      sk: `BLOCK#${date}#${id}`,
+      blockId: id,
+      startDate: date,
+      units: "kg",
+      oneRepMax: maxes,
+      accessories: DEFAULT_ACCESSORIES,
+      createdAt: new Date().toISOString(),
+      createdBy: "seed",
+    });
+  }
 
   // A handful of logged sets across the first fortnight, so the progress chart
   // and the personal-bests panel have something real to render.
@@ -133,7 +160,7 @@ const main = async (): Promise<void> => {
         reps: entry.reps,
         units: "kg",
         setIndex: i + 1,
-        blockId,
+        blockId: currentId,
         loggedBy: "seed",
       });
       written++;

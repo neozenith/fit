@@ -29,7 +29,6 @@ const PAGES = [
   ["history-volume", "/history/volume"],
   ["history-rep-maxes", "/history/rep-maxes"],
   ["history-cardio", "/history/cardio"],
-  ["history-streaks", "/history/streaks"],
   ["cost", "/finops"],
 ] as const;
 

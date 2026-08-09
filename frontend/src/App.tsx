@@ -7,12 +7,12 @@ import { FinOpsPage } from "./pages/FinOps.jsx";
 import { HistoryCardioPage } from "./pages/history/Cardio.jsx";
 import { HistoryOverviewPage } from "./pages/history/Overview.jsx";
 import { HistoryRepMaxesPage } from "./pages/history/RepMaxes.jsx";
-import { HistoryStreaksPage } from "./pages/history/Streaks.jsx";
 import { HistoryVolumePage } from "./pages/history/Volume.jsx";
 import { LogPage } from "./pages/Log.jsx";
 import { MeasurementsPage } from "./pages/Measurements.jsx";
 import { OverviewPage } from "./pages/Overview.jsx";
 import { ProgressPage } from "./pages/Progress.jsx";
+import { HeaderProgress } from "./progress-bar.jsx";
 import { useLinkInterception, usePath } from "./router.jsx";
 import "./styles/app.css";
 import { THEME_LABEL, THEME_ORDER, useTheme } from "./theme.js";
@@ -128,14 +128,6 @@ const ROUTES: Route[] = [
     render: () => <HistoryCardioPage />,
   },
   {
-    path: "/history/streaks",
-    label: "Streaks",
-    icon: "\u{1F525}",
-    section: "History",
-    render: () => <HistoryStreaksPage />,
-  },
-
-  {
     path: "/finops",
     label: "Cost",
     icon: "\u{1F4B0}",
@@ -152,7 +144,13 @@ const ROUTES: Route[] = [
  * URLs rendering one page would undermine "every view is a URL" from the other
  * direction — one view, one address.
  */
-const MOVED: Record<string, string> = { "/history/bodyweight": "/measurements" };
+const MOVED: Record<string, string> = {
+  "/history/bodyweight": "/measurements",
+  // Streaks answered "how many days in a row", which turned out to be a
+  // curiosity rather than something any decision followed from. Its data still
+  // exists; the page did not earn a slot in the nav.
+  "/history/streaks": "/history",
+};
 
 const SECTIONS = ["Train", "Track", "History", "Platform"];
 
@@ -247,6 +245,12 @@ export const App = () => {
             {envBadge}
           </span>
         )}
+        {/* Block, week and session progress — the three questions that are
+            always live while training, previously only answerable by
+            navigating somewhere. In the header they follow you onto the cost
+            page and the history charts, which is the point: context, not
+            content. */}
+        <HeaderProgress />
         <div className="spacer" />
         {identity && <span className="muted who">{identity.email}</span>}
         <a className="muted" href="/oauth2/logout">

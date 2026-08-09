@@ -53,6 +53,29 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   return body as T;
 };
 
+export interface CuratedExercise {
+  exercise: string;
+  equipment: string;
+  movement: string;
+  unilateral?: boolean;
+  isometric?: boolean;
+  bodyweightLoaded?: boolean;
+  retired?: boolean;
+  /** True when a stored override exists rather than the shipped seed value. */
+  curated?: boolean;
+}
+
+export interface BlockSummary {
+  block: BlockConfig;
+  progress: BlockProgress;
+  sessionCount: number;
+  completeCount: number;
+  firstDate: string;
+  lastDate: string;
+  /** How many earlier versions of this block exist (ADR-0029). */
+  supersededCount: number;
+}
+
 /** One set as it was actually recorded. */
 export interface LoggedSet {
   timestamp: string;
@@ -100,7 +123,16 @@ export const api = {
       blockCount: number;
     }>("/api/blocks/current"),
 
-  blocks: () => request<{ blocks: BlockConfig[] }>("/api/blocks"),
+  /** Every block with its own progress — the year view's single request. */
+  blocks: () => request<{ blocks: BlockSummary[] }>("/api/blocks"),
+
+  catalogue: () => request<{ exercises: CuratedExercise[] }>("/api/catalogue"),
+
+  curateExercise: (entry: CuratedExercise) =>
+    request<{ exercise: CuratedExercise }>("/api/catalogue", {
+      method: "PUT",
+      body: JSON.stringify(entry),
+    }),
 
   sessions: (blockId: string, week6?: string) =>
     request<{ block: BlockConfig; sessions: Session[] }>(

@@ -265,7 +265,11 @@ const BlockDetail = ({
   return (
     <section className="card">
       <h2>
-        <span className="mono">{blockLabel(block.blockId)}</span>
+        {/* The full identifier stays in the title, so an abbreviated legacy
+            UUID is still copyable and still unambiguous on inspection. */}
+        <span className="mono" title={block.blockId}>
+          {blockLabel(block.blockId)}
+        </span>
         <span className="muted">
           {" "}
           · from {formatDate(block.startDate)} · seeds {block.oneRepMax.squat}/

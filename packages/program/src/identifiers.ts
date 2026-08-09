@@ -17,10 +17,17 @@ const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "
 /** `2027-08-10` → `B-20270810`. The stored identity, and the sort key. */
 export const blockId = (startDate: string): string => `B-${startDate.replaceAll("-", "")}`;
 
-/** `B-20270810` → `B-2027AUG10`. For humans; never stored, never compared. */
+/**
+ * `B-20270810` → `B-2027AUG10`. For humans; never stored, never compared.
+ *
+ * An identifier of the older shape is ABBREVIATED rather than printed whole: a
+ * 36-character UUID in a timeline row or a heading is unreadable and pushes
+ * everything beside it off screen. Eight characters is enough to tell a handful
+ * of blocks apart, and every call site keeps the full value in a `title`.
+ */
 export const blockLabel = (id: string): string => {
   const match = /^B-(\d{4})(\d{2})(\d{2})$/.exec(id);
-  if (!match) return id;
+  if (!match) return id.length > 12 ? `${id.slice(0, 8)}…` : id;
   const [, year, month, day] = match as unknown as [string, string, string, string];
   return `B-${year}${MONTHS[Number(month) - 1] ?? month}${day}`;
 };

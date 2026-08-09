@@ -22,10 +22,12 @@ describe("block identifiers", () => {
     expect(blockLabel(id)).toBe(label);
   });
 
-  test("an identifier of the older shape passes through unchanged", () => {
+  test("an identifier of the older shape is abbreviated, not reinterpreted", () => {
     // Blocks created before this scheme carry a UUID and are append-only, so
-    // they cannot be rewritten. Rendering the raw value beats rendering a lie.
+    // they cannot be rewritten. A short one prints whole; a UUID is truncated,
+    // because 36 characters in a timeline row pushes everything else off screen.
     expect(blockLabel("seed-block-1")).toBe("seed-block-1");
+    expect(blockLabel("6d3f700d-dc6f-4f14-bf5a-23b9aea00722")).toBe("6d3f700d…");
     expect(blockStartDate("seed-block-1")).toBeNull();
   });
 

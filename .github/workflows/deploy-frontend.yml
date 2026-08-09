@@ -6,11 +6,19 @@ name: Deploy frontend
 # prod.
 
 on:
+  # `api/**` is in the filters deliberately. The SPA and the API share a
+  # response contract, so an API-only change can leave a deployed bundle
+  # calling a shape that no longer exists — which is exactly what happened when
+  # /api/history changed from a summary to a bundle: every stack applied, the
+  # smoke suite passed, and the page rendered blank because the SPA was three
+  # commits old. Redeploying the SPA is an S3 sync and an invalidation; skew is
+  # far more expensive than the rebuild.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - frontend/**
       - packages/program/**
+      - api/**
       - .github/workflows/deploy-frontend.yml
   push:
     branches: [main]
@@ -18,7 +26,18 @@ on:
     paths:
       - frontend/**
       - packages/program/**
+      - api/**
       - .github/workflows/deploy-frontend.yml
+  # Manual redeploy. Without it the only way to re-publish the SPA is to touch
+  # a frontend file, which is a commit that exists solely to trip a filter.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: dev | test | prod
+        required: true
+        default: test
+        type: choice
+        options: [dev, test, prod]
 
 permissions:
   contents: read
@@ -33,14 +52,20 @@ jobs:
     # Draft pull requests build in App CI but publish nothing.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    # A manual run names its own target; everything else derives it from the Git
+    # event (ADR-0007). The two expressions must stay identical — `environment:`
+    # binds the promotion gate, `TARGET_ENV` picks the bucket, and a mismatch
+    # would deploy one environment's bundle under another's approval.
     environment: >-
-      ${{ startsWith(github.ref, 'refs/tags/v') && 'prod'
-       || github.ref == 'refs/heads/main' && 'test'
+      ${{ inputs.environment
+       || (startsWith(github.ref, 'refs/tags/v') && 'prod')
+       || (github.ref == 'refs/heads/main' && 'test')
        || 'dev' }}
     env:
       TARGET_ENV: >-
-        ${{ startsWith(github.ref, 'refs/tags/v') && 'prod'
-         || github.ref == 'refs/heads/main' && 'test'
+        ${{ inputs.environment
+         || (startsWith(github.ref, 'refs/tags/v') && 'prod')
+         || (github.ref == 'refs/heads/main' && 'test')
          || 'dev' }}
     steps:
       - uses: actions/checkout@v6

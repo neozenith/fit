@@ -3,27 +3,31 @@ import {
   type AccessoryChoices,
   type BlockConfig,
   DEFAULT_ACCESSORIES,
+  generateBlock,
+  mergeExerciseNames,
+  type Session,
 } from "@fit/program";
-import { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { useEffect, useMemo, useState } from "react";
+import { api, type PersonalBest } from "../api.js";
 import { useCatalogue } from "../catalogue.js";
-import { Banner, formatDate, Loading } from "../components.jsx";
+import { Combobox } from "../combobox.jsx";
+import { Banner, formatDate, formatShortDate, Loading } from "../components.jsx";
 import { navigate } from "../router.jsx";
 
 /**
  * The Inputs sheet: everything a six-week block is projected FROM.
  *
  * Named `/block-inputs` rather than `/block` because that is what it is. The
- * page does not show a block — the overview does — it collects the handful of
- * values the entire block is a pure function of (ADR-0001): three one-rep
- * maxes, a start date, units, and the accessory choices.
+ * page collects the handful of values the entire block is a pure function of
+ * (ADR-0001) — three one-rep maxes, a start date, units, accessory choices —
+ * and previews the six weeks those values produce, so the dates land somewhere
+ * visible BEFORE the block is committed rather than after.
  *
  * ON EDITING AND DELETING. Storage is append-only and the API role has no
- * `DeleteItem` (ADR-0013), so neither exists. "Edit" and "reset" are both the
- * same act: write a new block with the same start date, which supersedes the
- * old one because the API resolves ties by latest write. That is stated plainly
- * below rather than hidden behind a button labelled "Save" that quietly creates
- * a second row — the previous version stays queryable, and that is the point.
+ * `DeleteItem` (ADR-0029), so neither exists. "Edit" and "reset" are the same
+ * act: write a new block with the same start date, which supersedes the old one.
+ * That is stated plainly rather than hidden behind a Save button that quietly
+ * writes a second row.
  */
 
 const LIFTS = [
@@ -35,11 +39,10 @@ const LIFTS = [
 /**
  * The accessory slots, and where each one's suggestions come from.
  *
- * The three `ACCESSORY_OPTIONS` slots are the program's own prescribed menus.
+ * The four `ACCESSORY_OPTIONS` slots are the program's own prescribed menus.
  * The four OPTIONAL slots — the spreadsheet's "Optional Exercise 1/2" and
- * "Optional Lower Body 1/2" — were free text on the Inputs sheet, so they draw
- * their suggestions from the EXERCISE CATALOGUE instead: the movements actually
- * performed, which is a better menu than anything hardcoded here.
+ * "Optional Lower Body 1/2" — were free text on the Inputs sheet, so they offer
+ * the canonical exercise list instead.
  */
 const SLOTS: Array<{
   key: keyof AccessoryChoices;
@@ -75,6 +78,7 @@ const SLOTS: Array<{
 export const BlockInputsPage = () => {
   const [current, setCurrent] = useState<BlockConfig | null>(null);
   const [blockCount, setBlockCount] = useState(0);
+  const [bests, setBests] = useState<Record<string, PersonalBest>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,16 +92,18 @@ export const BlockInputsPage = () => {
     deadlift: "140",
     accessories: DEFAULT_ACCESSORIES as AccessoryChoices,
   });
+  const [seeded, setSeeded] = useState(false);
 
   useEffect(() => {
-    api
-      .currentBlock()
-      .then((r) => {
+    Promise.all([api.currentBlock(), api.progress()])
+      .then(([r, p]) => {
         setCurrent(r.block);
         setBlockCount(r.blockCount ?? 0);
-        // Pre-filled from the live block, so the common action — "same setup,
-        // new maxes" — is editing one number rather than retyping eleven.
+        setBests(p.personalBests ?? {});
+
         if (r.block) {
+          // Pre-filled from the live block, so the common action — "same setup,
+          // new maxes" — is editing one number rather than retyping eleven.
           setDraft({
             startDate: r.block.startDate,
             units: r.block.units,
@@ -106,6 +112,19 @@ export const BlockInputsPage = () => {
             deadlift: String(r.block.oneRepMax.deadlift),
             accessories: r.block.accessories,
           });
+        } else {
+          // No block yet: seed from the estimated maxes rather than from
+          // invented defaults, so a first block starts from something true.
+          const estimate = (lift: string) => p.personalBests?.[lift]?.estimated;
+          setDraft((d) => ({
+            ...d,
+            squat: estimate("squat") ? String(Math.round(estimate("squat") as number)) : d.squat,
+            bench: estimate("bench") ? String(Math.round(estimate("bench") as number)) : d.bench,
+            deadlift: estimate("deadlift")
+              ? String(Math.round(estimate("deadlift") as number))
+              : d.deadlift,
+          }));
+          setSeeded(Object.keys(p.personalBests ?? {}).length > 0);
         }
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -114,6 +133,32 @@ export const BlockInputsPage = () => {
 
   const setAccessory = (key: keyof AccessoryChoices, value: string) =>
     setDraft((d) => ({ ...d, accessories: { ...d.accessories, [key]: value } }));
+
+  // The preview is generated IN THE BROWSER from the same module the server uses
+  // (ADR-0019), so it moves as you type. A round trip would make the six weeks
+  // something you see only after committing to them.
+  const preview: Session[] = useMemo(() => {
+    const numbers = {
+      squat: Number(draft.squat),
+      bench: Number(draft.bench),
+      deadlift: Number(draft.deadlift),
+    };
+    if (Object.values(numbers).some((n) => !Number.isFinite(n) || n <= 0)) return [];
+    try {
+      return generateBlock({
+        blockId: "preview",
+        startDate: draft.startDate,
+        units: draft.units as "kg" | "lb",
+        oneRepMax: numbers,
+        accessories: draft.accessories,
+      });
+    } catch {
+      // An invalid date is the only realistic failure, and it is transient —
+      // half-typed input. Showing nothing beats an error the user is mid-way
+      // through fixing.
+      return [];
+    }
+  }, [draft]);
 
   const create = async () => {
     setSaving(true);
@@ -140,17 +185,14 @@ export const BlockInputsPage = () => {
   if (loading) return <Loading what="your block inputs" />;
 
   const replacing = current !== null && current.startDate === draft.startDate;
-  const catalogueOptions = [...catalogue]
-    .sort((a, b) => a.equipment.localeCompare(b.equipment) || a.exercise.localeCompare(b.exercise))
-    .map((e) => e.exercise);
+  const names = mergeExerciseNames(catalogue.map((e) => e.exercise));
+  const weeks = [...new Set(preview.map((s) => s.week))].sort((a, b) => a - b);
 
   return (
     <>
       <h1>Block inputs</h1>
       {error && <Banner variant="error">{error}</Banner>}
 
-      {/* State first, and unambiguously. "Do I have a block?" was the single
-          least answerable question in the app. */}
       <section className="card">
         {current ? (
           <>
@@ -161,15 +203,15 @@ export const BlockInputsPage = () => {
               {blockCount > 1 && <> · {blockCount} blocks recorded in total</>}
             </p>
             <p>
-              <a href="/overview">See the six weeks</a> · <a href="/log">Log a session</a>
+              <a href="/overview">See how it is going</a> · <a href="/log">Log a session</a>
             </p>
           </>
         ) : (
           <>
             <h2>You have no block yet</h2>
             <p className="muted">
-              Fill in the inputs below and create one. Everything the six weeks prescribe is
-              computed from these values, so nothing here is guesswork you have to repeat later.
+              Everything the six weeks prescribe is computed from the values below, so nothing here
+              is guesswork you have to repeat later.
             </p>
           </>
         )}
@@ -179,7 +221,7 @@ export const BlockInputsPage = () => {
         <h2>Seed one-rep maxes</h2>
         <p className="muted">
           The whole block is a projection of these three numbers. No prescribed weight is ever
-          stored — change a max and every session in the block moves with it.
+          stored — change a max and every session below moves with it.
         </p>
         <div className="row">
           {LIFTS.map((lift) => (
@@ -192,6 +234,14 @@ export const BlockInputsPage = () => {
                 step="2.5"
                 value={draft[lift.key]}
                 onChange={(e) => setDraft({ ...draft, [lift.key]: e.target.value })}
+              />
+              {/* The estimate from the log, offered rather than imposed. It is
+                  computed from every set ever recorded, so it is a better
+                  starting guess than memory — but a max is a decision, and
+                  overwriting one silently would be the wrong kind of help. */}
+              <Estimate
+                best={bests[lift.key]}
+                onUse={(v) => setDraft({ ...draft, [lift.key]: v })}
               />
             </div>
           ))}
@@ -216,42 +266,78 @@ export const BlockInputsPage = () => {
             />
           </div>
         </div>
+        {seeded && !current && (
+          <p className="muted">
+            Seeded from your estimated maxes. Adjust anything that does not match what you would
+            actually attempt today.
+          </p>
+        )}
       </section>
 
       <section className="card">
         <h2>Accessories</h2>
         <p className="muted">
-          The four <em>optional</em> slots offer every movement in your exercise catalogue — the
-          things you have actually done. The prescribed slots offer the program's own menus. Any
-          slot accepts free text.
+          The four <em>optional</em> slots offer the full exercise list; the prescribed slots offer
+          the program's own menus. Every field also accepts anything you type.
         </p>
         <div className="grid">
-          {SLOTS.map((slot) => {
-            const suggestions =
-              slot.menu === "catalogue" ? catalogueOptions : [...ACCESSORY_OPTIONS[slot.menu]];
-            return (
-              <div className="field" key={slot.key}>
-                <label htmlFor={`slot-${slot.key}`}>
+          {SLOTS.map((slot) => (
+            <Combobox
+              key={slot.key}
+              id={`slot-${slot.key}`}
+              label={
+                <>
                   {slot.label} <span className="muted">— {slot.hint}</span>
-                </label>
-                {/* An input with a datalist, not a select: the spreadsheet let
-                    these be anything, and a closed list would refuse a movement
-                    the catalogue has not seen yet — which is every new one. */}
-                <input
-                  id={`slot-${slot.key}`}
-                  list={`options-${slot.key}`}
-                  value={draft.accessories[slot.key]}
-                  onChange={(e) => setAccessory(slot.key, e.target.value)}
-                />
-                <datalist id={`options-${slot.key}`}>
-                  {suggestions.map((option) => (
-                    <option key={option} value={option} />
-                  ))}
-                </datalist>
-              </div>
-            );
-          })}
+                </>
+              }
+              value={draft.accessories[slot.key]}
+              options={slot.menu === "catalogue" ? names : [...ACCESSORY_OPTIONS[slot.menu]]}
+              onChange={(value) => setAccessory(slot.key, value)}
+              placeholder="Search or type"
+            />
+          ))}
         </div>
+      </section>
+
+      {/* The preview lives HERE rather than only on the overview, because the
+          question it answers — "which days does this land on?" — is one you ask
+          before committing, not after. */}
+      <section className="card">
+        <h2>What this produces</h2>
+        {weeks.length === 0 ? (
+          <p className="muted">Fill in three positive maxes and a start date to see the block.</p>
+        ) : (
+          <>
+            <p className="muted">
+              {preview.length} sessions from {formatDate(preview[0]?.date ?? draft.startDate)} to{" "}
+              {formatDate(preview.at(-1)?.date ?? draft.startDate)}.
+            </p>
+            <div className="calendar">
+              {weeks.map((week) => {
+                const weekSessions = preview.filter((s) => s.week === week);
+                return (
+                  <div key={week} className="calendar__week">
+                    <div className="calendar__label">
+                      <strong>Week {week}</strong>
+                      <span className="muted">{weekSessions[0]?.weekTitle ?? ""}</span>
+                    </div>
+                    <div className="calendar__days">
+                      {weekSessions.map((session) => (
+                        <div className="day day--future" key={`${session.week}-${session.day}`}>
+                          <span className="day__date">{formatShortDate(session.date)}</span>
+                          <span className="day__name">Day {session.day}</span>
+                          <span className="day__meta">
+                            {session.exercises.filter((e) => e.sets.length > 0).length} exercises
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </section>
 
       <section className="card">
@@ -266,7 +352,7 @@ export const BlockInputsPage = () => {
             </>
           ) : (
             <>
-              This creates a new block starting {formatDate(draft.startDate)}. Choosing today's date
+              This creates a block starting {formatDate(draft.startDate)}. Choosing today's date
               while a block is running effectively resets it — the newer block becomes the live one
               from its start date onward.
             </>
@@ -277,5 +363,24 @@ export const BlockInputsPage = () => {
         </button>
       </section>
     </>
+  );
+};
+
+const Estimate = ({
+  best,
+  onUse,
+}: {
+  best: PersonalBest | undefined;
+  onUse: (value: string) => void;
+}) => {
+  if (!best) return <span className="muted field__hint">No logged sets to estimate from.</span>;
+  const value = String(Math.round(best.estimated));
+  return (
+    <span className="field__hint muted">
+      Estimated {value} from {best.weight}×{best.reps}{" "}
+      <button type="button" className="linkish" onClick={() => onUse(value)}>
+        use
+      </button>
+    </span>
   );
 };

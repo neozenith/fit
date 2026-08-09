@@ -33,6 +33,15 @@ interface Route {
   path: string;
   label: string;
   section: string;
+  /**
+   * The rail's entire content when collapsed.
+   *
+   * An emoji rather than an icon font or an SVG set: it is one character, it
+   * needs no build step, and it inherits the text colour so it themes for free.
+   * The collapsed rail previously showed two clipped letters of each label,
+   * which was unreadable and looked broken.
+   */
+  icon: string;
   render: () => React.ReactNode;
   /** Paths that also resolve here — earlier names, kept so old links work. */
   aliases?: string[];
@@ -42,57 +51,97 @@ const ROUTES: Route[] = [
   {
     path: "/overview",
     label: "Overview",
+    icon: "\u{1F4C5}",
     section: "Train",
     render: () => <OverviewPage />,
     // `/today` was this page's name before it became a six-week calendar rather
     // than a single day's prescription.
     aliases: ["/today", "/"],
   },
-  { path: "/log", label: "Log a session", section: "Train", render: () => <LogPage /> },
+  // SECOND, ahead of logging: you set a block up before you can log against it,
+  // and a first-time visitor following the nav top-to-bottom should meet the
+  // inputs before the page that needs them.
   {
     path: "/block-inputs",
     label: "Block inputs",
+    icon: "\u{1F3AF}",
     section: "Train",
     render: () => <BlockInputsPage />,
     aliases: ["/block"],
   },
+  {
+    path: "/log",
+    label: "Log a session",
+    icon: "\u{1F4DD}",
+    section: "Train",
+    render: () => <LogPage />,
+  },
 
-  { path: "/measurements", label: "Body", section: "Track", render: () => <MeasurementsPage /> },
-  { path: "/progress", label: "Progress", section: "Track", render: () => <ProgressPage /> },
-  { path: "/exercises", label: "Exercises", section: "Track", render: () => <ExercisesPage /> },
+  {
+    path: "/measurements",
+    label: "Body",
+    icon: "\u{2696}",
+    section: "Track",
+    render: () => <MeasurementsPage />,
+  },
+  {
+    path: "/progress",
+    label: "Progress",
+    icon: "\u{1F4C8}",
+    section: "Track",
+    render: () => <ProgressPage />,
+  },
+  {
+    path: "/exercises",
+    label: "Exercises",
+    icon: "\u{1F3CB}",
+    section: "Track",
+    render: () => <ExercisesPage />,
+  },
 
   {
     path: "/history",
     label: "Overview",
+    icon: "\u{1F4DA}",
     section: "History",
     render: () => <HistoryOverviewPage />,
   },
   {
     path: "/history/volume",
     label: "Volume",
+    icon: "\u{1F4CA}",
     section: "History",
     render: () => <HistoryVolumePage />,
   },
   {
     path: "/history/rep-maxes",
     label: "Rep maxes",
+    icon: "\u{1F947}",
     section: "History",
     render: () => <HistoryRepMaxesPage />,
   },
   {
     path: "/history/cardio",
     label: "Cardio",
+    icon: "\u{1F6B4}",
     section: "History",
     render: () => <HistoryCardioPage />,
   },
   {
     path: "/history/streaks",
     label: "Streaks",
+    icon: "\u{1F525}",
     section: "History",
     render: () => <HistoryStreaksPage />,
   },
 
-  { path: "/finops", label: "Cost", section: "Platform", render: () => <FinOpsPage /> },
+  {
+    path: "/finops",
+    label: "Cost",
+    icon: "\u{1F4B0}",
+    section: "Platform",
+    render: () => <FinOpsPage />,
+  },
 ];
 
 /**
@@ -219,10 +268,15 @@ export const App = () => {
                   <a
                     key={route.path}
                     href={route.path}
-                    // The title is what a collapsed rail has instead of a label.
+                    // The title carries the name when the label is hidden in the
+                    // rail — as a tooltip, and as the accessible name, since
+                    // `display: none` content is excluded from that computation.
                     title={route.label}
                     aria-current={route.path === active?.path ? "page" : undefined}
                   >
+                    <span className="sidenav__icon" aria-hidden="true">
+                      {route.icon}
+                    </span>
                     <span className="sidenav__label">{route.label}</span>
                   </a>
                 ))}

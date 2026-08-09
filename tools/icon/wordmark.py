@@ -135,6 +135,65 @@ def tittle_centre(
     )
 
 
+def glyph_bounds(
+    font_path: Path,
+    text: str,
+    char_index: int,
+    tracking: float = 0.0,
+    location: dict[str, float] | None = None,
+) -> tuple[float, float, float, float]:
+    """Inked bounds `(x0, y0, x1, y1)` of one glyph, in the wordmark's font-unit space.
+
+    INKED bounds, not the advance box: the result is where the letter visually sits
+    rather than where its metrics say it sits. For a glyph with asymmetric sidebearings —
+    most of them — those differ by enough to throw an alignment off at icon scale.
+    """
+    font = TTFont(font_path)
+    cmap = font.getBestCmap()
+    glyph_set = font.getGlyphSet(location=location or FONT_LOCATION)
+
+    pen_x = 0.0
+    for char in text[:char_index]:
+        name = cmap.get(ord(char))
+        if name is None:
+            raise SystemExit(f"Font has no glyph for {char!r}")
+        pen_x += glyph_set[name].width + tracking
+
+    name = cmap.get(ord(text[char_index]))
+    if name is None:
+        raise SystemExit(f"Font has no glyph for {text[char_index]!r}")
+    pen = RecordingPen()
+    glyph_set[name].draw(pen)
+    pts = [p for _, args in pen.value for p in args if isinstance(p, tuple)]
+    if not pts:
+        raise SystemExit(f"Glyph {name!r} has no outline to measure")
+    xs = [x for x, _ in pts]
+    ys = [y for _, y in pts]
+    return (pen_x + min(xs), min(ys), pen_x + max(xs), max(ys))
+
+
+def glyph_centre(
+    font_path: Path,
+    text: str,
+    char_index: int,
+    tracking: float = 0.0,
+    location: dict[str, float] | None = None,
+) -> tuple[float, float]:
+    """Inked centre of one glyph, in the wordmark's own font-unit coordinates."""
+    x0, y0, x1, y1 = glyph_bounds(font_path, text, char_index, tracking, location)
+    return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+
+
+def x_height(font_path: Path) -> float:
+    """The font's x-height in font units — where a lowercase crossbar sits.
+
+    Read from OS/2 rather than measured off a glyph, because `f` and `t` both carry
+    ascenders and their bounding boxes say nothing about where their bars cross.
+    """
+    font = TTFont(font_path)
+    return float(getattr(font["OS/2"], "sxHeight", 0.5 * font["head"].unitsPerEm))
+
+
 def place(
     mark: Wordmark, point: tuple[float, float], *, cx: float, baseline: float, cap_px: float
 ) -> tuple[float, float]:

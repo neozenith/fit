@@ -10,6 +10,7 @@
 
 export * from "./calendar.js";
 export { ACCESSORY_OPTIONS, DEFAULT_ACCESSORIES } from "./defaults.js";
+export * from "./exercises.js";
 export * from "./observations.js";
 export * from "./program.js";
 export * from "./projection.js";

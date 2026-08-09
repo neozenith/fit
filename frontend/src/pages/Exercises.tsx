@@ -2,11 +2,16 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Banner, Loading } from "../components.jsx";
 import { Segmented, SelectFilter } from "../filters.jsx";
-import { Plot, seriesColour } from "../plot.jsx";
 import { useQueryParam } from "../router.jsx";
 
 /**
  * The exercise catalogue — a root page, not a section of history.
+ *
+ * A TABLE and nothing else. The charts that were here answered a question this
+ * page is not for: "where does my volume go" belongs on the volume page, which
+ * has the filters and the time axis to answer it properly. A reference list
+ * wants to be scannable and sortable, and two charts above it just pushed the
+ * reference below the fold.
  *
  * It is a reference for the whole app rather than a chart about the past: what
  * movements exist, what equipment they need, which are unilateral or isometric.
@@ -67,16 +72,6 @@ export const ExercisesPage = () => {
     return b.totalVolumeKg - a.totalVolumeKg;
   });
 
-  // Isometric holds carry no volume by design — `sets × seconds × kg` is not a
-  // load — so they are excluded from the volume chart rather than drawn at zero,
-  // which would read as "never trained".
-  const charted = ordered.filter((e) => !e.isIsometric).slice(0, 25);
-
-  const byEquipment = new Map<string, number>();
-  for (const e of filtered) {
-    byEquipment.set(e.equipment, (byEquipment.get(e.equipment) ?? 0) + e.totalVolumeKg);
-  }
-
   return (
     <>
       <h1>Exercises</h1>
@@ -101,49 +96,6 @@ export const ExercisesPage = () => {
           {filtered.length} movements
           <span className="muted"> across {equipmentTypes.length} kinds of equipment</span>
         </h2>
-        <Plot
-          title="Lifetime volume by exercise"
-          height={Math.max(320, charted.length * 24)}
-          data={[
-            {
-              type: "bar",
-              orientation: "h",
-              // Reversed: Plotly draws the first category at the bottom of a
-              // horizontal axis, so an unreversed list reads upside down.
-              y: [...charted].reverse().map((e) => e.exercise),
-              x: [...charted].reverse().map((e) => e.totalVolumeKg),
-              marker: { color: charted.map((_, i) => seriesColour(i)).reverse() },
-              hovertemplate: "%{y}<br>%{x:,.0f}kg lifetime<extra></extra>",
-            },
-          ]}
-          layout={{
-            xaxis: { title: { text: "kg" } },
-            yaxis: { type: "category", automargin: true },
-            showlegend: false,
-          }}
-        />
-      </section>
-
-      <section className="card">
-        <h2>Where the work goes</h2>
-        <Plot
-          title="Share of lifetime volume by equipment"
-          height={300}
-          data={[
-            {
-              type: "bar",
-              x: [...byEquipment.keys()],
-              y: [...byEquipment.values()],
-              marker: { color: [...byEquipment.keys()].map((_, i) => seriesColour(i)) },
-              hovertemplate: "%{x}<br>%{y:,.0f}kg<extra></extra>",
-            },
-          ]}
-          layout={{ yaxis: { title: { text: "kg" } }, showlegend: false }}
-        />
-      </section>
-
-      <section className="card">
-        <h2>The catalogue</h2>
         <div className="table-scroll">
           <table>
             <thead>

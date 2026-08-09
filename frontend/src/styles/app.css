@@ -110,21 +110,16 @@ a {
 }
 
 .shell--collapsed .sidenav a {
-  text-align: center;
+  justify-content: center;
   padding: var(--s2);
 }
 
-/* Two characters of the label, as an icon of last resort. A rail with nothing
-   in it is a column of empty boxes; `::before` keeps the accessible name in the
-   markup while giving the eye something to aim at. */
-.shell--collapsed .sidenav a::before {
-  content: attr(title);
-  display: block;
-  overflow: hidden;
-  max-width: 1.6rem;
-  white-space: nowrap;
-  font-weight: 600;
-  font-size: 0.82rem;
+/* The rail shows the icon, full size and centred. The previous version clipped
+   two characters of the label with `::before`, which read as a rendering bug
+   rather than as an abbreviation. */
+.shell--collapsed .sidenav__icon {
+  font-size: 1.15rem;
+  width: auto;
 }
 
 .shell--collapsed .sidenav__group + .sidenav__group {
@@ -207,7 +202,9 @@ a {
 }
 
 .sidenav a {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
   padding: var(--s2) var(--s3);
   border-radius: var(--radius);
   color: var(--muted);
@@ -938,4 +935,241 @@ button:disabled {
   .calendar__week {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* A fixed-width icon column so labels line up regardless of glyph width —
+   emoji vary by more than a factor of two between platforms. */
+.sidenav__icon {
+  width: 1.25rem;
+  text-align: center;
+  flex: 0 0 auto;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+/* --- Per-set logging -------------------------------------------------------- */
+
+/* One row per prescribed set. The row you have not ticked IS the answer to
+   "where was I", so the rows are the primary content of the exercise, not a
+   detail revealed by a disclosure control. */
+.set-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  margin-top: var(--s3);
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s2);
+  border-radius: var(--radius);
+  border: 1px dashed var(--border);
+  min-width: 0;
+}
+
+.set-row--done {
+  border-style: solid;
+  border-color: var(--status-good);
+  background: color-mix(in srgb, var(--status-good) 8%, transparent);
+}
+
+.set-row__n {
+  width: 1.4rem;
+  flex: 0 0 auto;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.set-row__weight,
+.set-row__reps {
+  /* Wide enough for three digits and a decimal, narrow enough that four rows
+     fit a phone without wrapping. A full-width input per set would make the
+     page a scroll rather than a checklist. */
+  width: 4.5rem;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.set-row__target {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.set-row__logged,
+.set-row__when {
+  font-size: 0.85rem;
+}
+
+.set-row__logged {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The tick is the whole interaction, so it is the largest target in the row —
+   comfortably past the 44px minimum for a thumb with chalk on it. */
+.set-row__save,
+.set-row__tick {
+  margin-left: auto;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  border-radius: var(--radius);
+  flex: 0 0 auto;
+}
+
+.set-row__save {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+}
+
+.set-row__save:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.set-row__tick {
+  color: var(--status-good);
+  font-weight: 700;
+}
+
+/* --- Combobox --------------------------------------------------------------- */
+
+.combobox {
+  position: relative;
+}
+
+.combobox__control {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.combobox__control input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* The affordance a `<datalist>` never had: something visibly clickable that
+   says a list exists. Its absence is why the previous control was unusable. */
+.combobox__toggle {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.combobox__toggle:hover {
+  color: var(--fg);
+}
+
+.combobox__list {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin: var(--s1) 0 0;
+  padding: var(--s1);
+  list-style: none;
+  max-height: 16rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+.combobox__option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--s2) var(--s3);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.combobox__option--active,
+.combobox__option[aria-selected="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.combobox__empty {
+  padding: var(--s2) var(--s3);
+  font-size: 0.85rem;
+}
+
+.field__hint {
+  display: block;
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+
+/* A button that reads as a link — used where the action is "apply this value",
+   which is not navigation but is not a form submission either. */
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: inherit;
+  color: var(--link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* --- New-starter guidance ---------------------------------------------------- */
+
+.steps {
+  list-style: none;
+  counter-reset: step;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: start;
+}
+
+.steps li::before {
+  content: counter(step);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  font-size: 0.9rem;
 }

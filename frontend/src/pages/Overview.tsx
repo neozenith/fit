@@ -1,7 +1,7 @@
 import type { BlockConfig, Session } from "@fit/program";
 import { useEffect, useState } from "react";
 import { api, type BlockProgress } from "../api.js";
-import { Banner, formatDate, Loading, repLabel } from "../components.jsx";
+import { Banner, formatDate, formatShortDate, Loading, repLabel } from "../components.jsx";
 
 /**
  * The block at a glance: six weeks, colour-coded, with what is done.
@@ -39,10 +39,15 @@ const countable = (session: Session): string[] =>
 const stateOf = (session: Session, progress: BlockProgress, today: string): SessionState => {
   const logged = progress[`${session.week}-${session.day}`] ?? {};
   const expected = countable(session);
-  const hit = expected.filter((name) => (logged[name] ?? 0) > 0).length;
+  // Complete means every prescribed SET is logged, not merely that the exercise
+  // was touched. Counting exercises marked a session done after one set of four.
+  const done = session.exercises.filter(
+    (e) => e.sets.length > 0 && (logged[e.exercise]?.length ?? 0) >= e.sets.length,
+  ).length;
+  const touched = expected.filter((name) => (logged[name]?.length ?? 0) > 0).length;
 
-  if (expected.length > 0 && hit >= expected.length) return "done";
-  if (hit > 0) return "partial";
+  if (expected.length > 0 && done >= expected.length) return "done";
+  if (touched > 0) return "partial";
   return session.date > today ? "future" : "todo";
 };
 
@@ -70,21 +75,11 @@ export const OverviewPage = () => {
   if (error) return <Banner variant="error">{error}</Banner>;
   if (loading) return <Loading what="your block" />;
 
-  if (!block) {
-    // The empty state says what is true and what to do, rather than rendering a
-    // calendar of nothing. "No block" was previously indistinguishable from "the
-    // page failed to load".
-    return (
-      <>
-        <h1>Overview</h1>
-        <Banner>You have no training block yet.</Banner>
-        <p>
-          A block is six weeks projected from three one-rep maxes.{" "}
-          <a href="/block-inputs">Set your inputs and create one</a>.
-        </p>
-      </>
-    );
-  }
+  // The FIRST screen anyone sees, because it is the default route and a fresh
+  // account has no block. It has to teach the program in a paragraph and give
+  // exactly one thing to do — "you have no training block yet" states a fact
+  // and leaves the reader stuck.
+  if (!block) return <NewStarter hasHistory={blockCount > 0} />;
 
   const today = new Date().toISOString().slice(0, 10);
   const weeks = [...new Set(sessions.map((s) => s.week))].sort((a, b) => a - b);
@@ -152,7 +147,10 @@ export const OverviewPage = () => {
                     const state = stateOf(session, progress, today);
                     const logged = progress[`${session.week}-${session.day}`] ?? {};
                     const expected = countable(session);
-                    const hit = expected.filter((name) => (logged[name] ?? 0) > 0).length;
+                    const hit = session.exercises.filter(
+                      (e) =>
+                        e.sets.length > 0 && (logged[e.exercise]?.length ?? 0) >= e.sets.length,
+                    ).length;
                     return (
                       <a
                         key={`${session.week}-${session.day}`}
@@ -160,7 +158,7 @@ export const OverviewPage = () => {
                         href={`/log?week=${session.week}&day=${session.day}`}
                         title={`${STATE_LABEL[state]} — ${hit}/${expected.length} exercises`}
                       >
-                        <span className="day__date">{session.date.slice(5)}</span>
+                        <span className="day__date">{formatShortDate(session.date)}</span>
                         <span className="day__name">Day {session.day}</span>
                         <span className="day__meta">
                           {hit}/{expected.length}
@@ -229,3 +227,91 @@ export const OverviewPage = () => {
     </>
   );
 };
+
+/**
+ * What a new account sees.
+ *
+ * Three things, in order: what the program IS, what one number means, and the
+ * single next action. This is the default route, so it is the first screen
+ * anyone meets — "you have no training block yet" states a fact and leaves the
+ * reader stuck, which is what it replaced.
+ */
+const NewStarter = ({ hasHistory }: { hasHistory: boolean }) => (
+  <>
+    <h1>Start here</h1>
+    <p className="muted">
+      This runs the Candito 6-Week Strength Program. Six weeks of squat, bench and deadlift work,
+      projected from three numbers — nothing is prescribed until you supply them.
+    </p>
+
+    <section className="card">
+      <h2>How it works</h2>
+      <ol className="steps">
+        <li>
+          <div>
+            <strong>Give it three one-rep maxes.</strong>
+            <p className="muted">
+              What you could lift once today for squat, bench and deadlift. An estimate is fine —
+              week 5 measures you properly and the next block corrects itself from that.
+            </p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Train the sessions it prescribes.</strong>
+            <p className="muted">
+              Every weight is computed from those three numbers, never stored. Change a max and the
+              whole block moves with it.
+            </p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Tick each set off as you do it.</strong>
+            <p className="muted">
+              One tap per set. The rows you have not ticked are how you find your place after a
+              superset.
+            </p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Week 5 seeds the next block.</strong>
+            <p className="muted">
+              A single heavy set of one to four reps becomes the input to the following six weeks.
+              The program is a loop, not a one-off.
+            </p>
+          </div>
+        </li>
+      </ol>
+      <p>
+        <a className="button button--primary" href="/block-inputs">
+          Set your inputs
+        </a>
+      </p>
+    </section>
+
+    <section className="card">
+      <h2>While you are here</h2>
+      <p className="muted">
+        {hasHistory
+          ? "You have blocks on record but none running — the inputs page starts a new one from your most recent estimates."
+          : "Nothing is logged yet, so most pages will be empty until you train. These work from day one."}
+      </p>
+      <ul className="linklist">
+        <li>
+          <a href="/exercises">Exercises</a>{" "}
+          <span className="muted">— every movement the app knows about.</span>
+        </li>
+        <li>
+          <a href="/measurements">Body</a>{" "}
+          <span className="muted">— record a weigh-in without a block.</span>
+        </li>
+        <li>
+          <a href="/history">History</a>{" "}
+          <span className="muted">— five years imported from the tracker this replaces.</span>
+        </li>
+      </ul>
+    </section>
+  </>
+);

@@ -129,3 +129,20 @@ export const Banner = ({
 export const Loading = ({ what }: { what: string }) => (
   <output className="muted">Loading {what}…</output>
 );
+
+/**
+ * `08-Aug` — day then abbreviated month.
+ *
+ * `MM-DD` was ambiguous to anyone who reads dates day-first, which is most of
+ * the world and specifically this application's user: `08-09` could be the
+ * eighth of September or the ninth of August. An abbreviated month name cannot
+ * be misread in either direction, and it costs one character.
+ */
+export const formatShortDate = (iso: string): string => {
+  const [y, m, d] = iso.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+};

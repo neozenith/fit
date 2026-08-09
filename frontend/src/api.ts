@@ -53,8 +53,21 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   return body as T;
 };
 
-/** Sets logged per session, keyed `week-day` then exercise name. */
-export type BlockProgress = Record<string, Record<string, number>>;
+/** One set as it was actually recorded. */
+export interface LoggedSet {
+  timestamp: string;
+  reps: number;
+  weight?: number;
+  setIndex?: number;
+}
+
+/**
+ * Sets logged per session, keyed `week-day` then exercise name.
+ *
+ * The SETS, not a tally: the log marks off one prescribed set at a time, so it
+ * has to show what was recorded against each.
+ */
+export type BlockProgress = Record<string, Record<string, LoggedSet[]>>;
 
 export interface Identity {
   email: string;
@@ -82,7 +95,6 @@ export const api = {
     request<{
       block: BlockConfig | null;
       sessions: Session[];
-      /** Sets logged per session, keyed `week-day` then exercise name. */
       progress: BlockProgress;
       /** How many blocks exist at all — "never made one" vs "this is the live one". */
       blockCount: number;

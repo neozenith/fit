@@ -53,10 +53,13 @@ from typing import Callable
 from wordmark import (
     FONT_LOCATION,
     Wordmark,
+    glyph_bounds,
+    glyph_centre,
     outline_wordmark,
     place,
     tittle_centre,
     wordmark_group,
+    x_height,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,7 +69,7 @@ SVG_DIR = ART / "svg"
 PNG_DIR = ART / "png"
 
 CANVAS = 512
-SIZES = (512, 256, 128, 64, 32)
+SIZES = (512, 128, 32)
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 # Anchored on the OsakaNights theme (--accent is #5c4295 light / #c3b0fd dark), but the
@@ -224,10 +227,13 @@ def spark_node(
 # reading as a chart with scenery. Half-widths grow with the height so the flanks keep
 # roughly their original slope — raising an apex without widening its base turns a
 # mountain into a spike.
+# Peak 3 is now the TALLEST of the three, breaking the centre-dominant arrangement that
+# was making the range read as symmetrical. A range whose highest point is off-centre and
+# to the right also carries the same left-to-right rise as the series beneath it.
 FAR: list[Peak] = [
     ((118.0, 104.0), 126.0),
-    ((252.0, 44.0), 150.0),
-    ((396.0, 86.0), 132.0),
+    ((252.0, 60.0), 150.0),
+    ((404.0, 30.0), 140.0),
 ]
 # Mid climbs, and — more importantly — moves OFF-PHASE from far.
 #
@@ -278,12 +284,20 @@ SERIES_7: list[Point] = [
     (404.0, 234.0),
     (484.0, 260.0),
 ]
+# Index 3 is overwritten by the tittle in tittle mode; measured, it lands at roughly
+# (254, 121) and stays within ~9px of that across the whole weight and softness range,
+# so the interior points are spaced for that x rather than for the nominal 322.
+#
+# The final point sits ABOVE the record at y=76: the series now finishes climbing rather
+# than falling away. The record marker is consequently no longer the highest point on
+# the chart — the line carries on past it, which reads as "still going" rather than as
+# "peaked and declined".
 SERIES_5: list[Point] = [
-    (36.0, 348.0),
-    (132.0, 264.0),
-    (218.0, 306.0),
+    (30.0, 352.0),
+    (104.0, 282.0),
+    (166.0, 322.0),
     (322.0, 136.0),
-    (480.0, 246.0),
+    (486.0, 76.0),
 ]
 
 # The record node lifted so its CENTRE sits on the same horizontal as the far range's
@@ -335,7 +349,12 @@ ACCENTS: dict[str, dict[str, str]] = {
 Variant = Callable[[dict[str, str]], str]
 
 
-def mountains(t: dict[str, str], simple: bool = False, invert: bool = False) -> str:
+def mountains(
+    t: dict[str, str],
+    simple: bool = False,
+    invert: bool = False,
+    mid_override: list[Peak] | None = None,
+) -> str:
     """Paint the three ranges, back to front.
 
     `invert` swaps which tone the FAR and NEAR ranges wear. With three tones that swap
@@ -348,6 +367,8 @@ def mountains(t: dict[str, str], simple: bool = False, invert: bool = False) -> 
     shape shouts and the foreground recedes.
     """
     geometry = (FAR_S, MID_S, NEAR_S) if simple else (FAR, MID, NEAR)
+    if mid_override is not None:
+        geometry = (geometry[0], mid_override, geometry[2])
     tones = ("near", "mid", "far") if invert else ("far", "mid", "near")
     return "".join(
         mountain_range(peaks, t[tone]) for peaks, tone in zip(geometry, tones)
@@ -418,6 +439,53 @@ def tittle_point(text: str, loc: dict[str, float], cx: float) -> Point:
     )
 
 
+def glyph_x(text: str, loc: dict[str, float], cx: float, char: str) -> float:
+    """Canvas x of a glyph's inked centre — used to stand the final series point on it."""
+    mark = load_mark(text, loc)
+    gc = glyph_centre(FONT_PATH, text, text.index(char), location=loc)
+    return place(
+        mark, gc, cx=cx, baseline=WORDMARK_BASELINE, cap_px=WORDMARK_CAP
+    )[0]
+
+
+# How far each backing apex clears the bar it sits behind. Per-letter, not shared: an
+# equal clearance on both gives two peaks of near-identical height and the mid range
+# reads as symmetrical, which is exactly the flatness being designed out here.
+CROSSBAR_CLEARANCE = {"f": 44.0, "t": 118.0}
+CROSSBAR_MARGIN = 1.30  # how much wider than the letter the peak reads at bar height
+
+
+def backing_peak(text: str, loc: dict[str, float], cx: float, char: str) -> Peak:
+    """A mid-range peak sized and placed to sit BEHIND a lowercase crossbar.
+
+    The bar of an `f` or a `t` is a thin horizontal stroke at x-height. Where it
+    overhangs open ground it has almost nothing to contrast against — which is where the
+    sand accent measured 1.8:1 and went washy. Putting a mountain behind it turns that
+    stretch into 4.1:1.
+
+    Two things have to be solved, not guessed:
+      * the bar's height comes from OS/2 x-height, because `f` and `t` both have
+        ascenders and their bounding boxes say nothing about where the bar crosses;
+      * the peak's half-width is derived, because a triangle NARROWS as it rises. A
+        half-width that covers the letter at the baseline covers nothing at bar height.
+        Solving the similar triangle gives the width that actually lands.
+    """
+    mark = load_mark(text, loc)
+    idx = text.index(char)
+    x0, _, x1, _ = glyph_bounds(FONT_PATH, text, idx, location=loc)
+    kw = dict(cx=cx, baseline=WORDMARK_BASELINE, cap_px=WORDMARK_CAP)
+
+    left = place(mark, (x0, 0.0), **kw)[0]
+    right = place(mark, (x1, 0.0), **kw)[0]
+    bar_y = place(mark, (0.0, x_height(FONT_PATH)), **kw)[1]
+
+    apex_x = (left + right) / 2.0
+    apex_y = bar_y - CROSSBAR_CLEARANCE[char]
+    need_half = (right - left) / 2.0 * CROSSBAR_MARGIN
+    half_width = need_half * (BASE_Y - apex_y) / (BASE_Y - bar_y)
+    return ((apex_x, apex_y), half_width)
+
+
 def cx_aligning_tittle(text: str, loc: dict[str, float], target_x: float) -> float:
     """The wordmark centre that puts the tittle on `target_x`.
 
@@ -441,6 +509,8 @@ def _cell(
     tittle: bool = False,
     text_fill: str = "spark",
     align_tittle: bool = False,
+    scene_opacity: float = 1.0,
+    hide_text: bool = False,
 ) -> Variant:
     """One rendered cell.
 
@@ -464,9 +534,28 @@ def _cell(
             raise SystemExit("tittle mode needs text containing an 'i'")
         spark_at = tittle_point(text, loc, cx)
         pts[SPARKS[len(points)]] = spark_at
+        # Stand the closing point directly over the `t`, so the series' two anchored
+        # columns are both letterforms: the record sits on the `i`, the finish sits on
+        # the `t`. The chart stops being laid over the word and starts being pinned to it.
+        pts[-1] = (glyph_x(text, loc, cx, "t"), pts[-1][1])
+
+    # Mid peaks 2 and 3 are no longer free geometry: they exist to back the crossbars of
+    # the `f` and the `t`. Peaks 1 and 4 stay hand-placed, so the range still has its own
+    # rhythm at the edges rather than being wholly dictated by the type.
+    # Derived whenever there IS text, even when the text is not drawn — otherwise the
+    # wordless icon would carry a different mountainscape from its lettered sibling and
+    # the two would stop being the same mark.
+    mid_override: list[Peak] | None = None
+    if text:
+        mid_override = [
+            MID[0],
+            backing_peak(text, loc, cx, "f"),
+            backing_peak(text, loc, cx, "t"),
+            MID[3],
+        ]
 
     def build(t: dict[str, str]) -> str:
-        body = mountains(t, simple, invert) + series(
+        scene = mountains(t, simple, invert, mid_override) + series(
             pts,
             t,
             spark_index=SPARKS[len(points)],
@@ -474,8 +563,18 @@ def _cell(
             defer_spark=tittle,
             **HEAVY,
         )
-        if mark is not None:
+        # The scene fades as ONE group. Fading its parts individually would let the
+        # casing double-composite against the ranges underneath it and the cut-out would
+        # stop being a clean hole.
+        if scene_opacity < 1.0:
+            scene = f'<g opacity="{scene_opacity:g}">{scene}</g>'
+
+        body = scene
+        if mark is not None and not hide_text:
             body += wordmark_overlay(t, mark, text_fill, cx)
+        # The record marker is deliberately NOT inside the faded group: it is doing double
+        # duty as the tittle of the `i`, and a faded tittle reads as a badly printed
+        # letter rather than as a receding background element.
         if spark_at is not None:
             body += spark_node(spark_at, t, HEAVY["node_r"])
         return body
@@ -490,30 +589,20 @@ def _cell(
 # default, so `crest-Fit` and `crest-fit` resolve to the same path and the second build
 # silently overwrites the first — a bug that is invisible locally until you compare the
 # renders, and that would not reproduce on a Linux CI box.
-# Locked in by now: lowercase "fit", the record marker doubling as the tittle, a 5-point
-# series, the full massif, and a 25% cut-out. Everything below varies exactly one thing.
-BASE = dict(points=SERIES_5, casing_opacity=0.25, text="fit", tittle=True)
+# Locked in by now: lowercase "fit", centred, the record marker doubling as the tittle,
+# a 5-point series that finishes climbing, the full massif, a 25% cut-out, WONK at
+# maximum, and `sand` as the accent — the one candidate that is the SAME hex in both
+# themes, so the accent is perceptually identical light and dark instead of being two
+# colours that merely play the same role.
+BASE = dict(points=SERIES_5, casing_opacity=0.25, text="fit", tittle=True, accent="sand")
 
-# Sheet 1 — the Fraunces variable axes. WONK is binary, so w700-s0-flat is the control
-# that shows what the wonk is actually contributing.
-AXIS_CELLS = {
-    "w400-s0": dict(weight=400.0, soft=0.0, wonk=1.0),
-    "w400-s100": dict(weight=400.0, soft=100.0, wonk=1.0),
-    "w700-s0": dict(weight=700.0, soft=0.0, wonk=1.0),
-    "w700-s100": dict(weight=700.0, soft=100.0, wonk=1.0),
-    "w900-s50": dict(weight=900.0, soft=50.0, wonk=1.0),
-    "w700-s0-flat": dict(weight=700.0, soft=0.0, wonk=0.0),
-}
+# Type is settled: Fraunces at wght 400, SOFT 50, WONK at maximum.
+LOCKED_AXES = dict(weight=400.0, soft=50.0, wonk=1.0)
 
-# Sheet 2 — centred wordmark versus one slid across so the tittle sits on the column the
-# record marker used to occupy.
-ALIGN_CELLS = {
-    "centred": dict(align_tittle=False),
-    "offset": dict(align_tittle=True),
-}
-
-# Sheet 3 — accent colour, on the settled composition.
-ACCENT_CELLS = {f"acc-{k}": dict(accent=k) for k in ACCENTS}
+# Open axis: how far the landscape recedes behind the wordmark. The scene carries the
+# whole mark's texture, so fading it is the lever for letting the type dominate without
+# shrinking or recolouring anything.
+SCENE_OPACITIES = (1.0, 0.85, 0.70, 0.55, 0.40, 0.25)
 
 VARIANT_ACCENT: dict[str, str] = {}
 VARIANTS: dict[str, Variant] = {}
@@ -526,16 +615,18 @@ def register(name: str, **kw: object) -> None:
     at emit time, and the CSS-variable build needs to bake it into the token block. So
     the closure stays colour-agnostic and the accent is looked up by variant name.
     """
-    VARIANT_ACCENT[name] = str(kw.pop("accent", "amber"))
-    VARIANTS[name] = _cell(**{**BASE, **kw})  # type: ignore[arg-type]
+    merged = {**BASE, **kw}
+    VARIANT_ACCENT[name] = str(merged.pop("accent"))
+    VARIANTS[name] = _cell(**merged)  # type: ignore[arg-type]
 
 
-for _name, _kw in AXIS_CELLS.items():
-    register(_name, **_kw)
-for _name, _kw in ALIGN_CELLS.items():
-    register(_name, weight=400.0, soft=100.0, **_kw)
-for _name, _kw in ACCENT_CELLS.items():
-    register(_name, weight=400.0, soft=100.0, **_kw)
+for _op in SCENE_OPACITIES:
+    register(f"op{int(_op * 100)}", scene_opacity=_op, **LOCKED_AXES)
+
+# The mark with no wordmark at all. Geometry is still derived from the text — the record
+# still stands where the tittle would be — so this is the same drawing with the type
+# removed, not a different composition.
+register("plain", hide_text=True, **LOCKED_AXES)
 
 # ── Emitters ─────────────────────────────────────────────────────────────────
 

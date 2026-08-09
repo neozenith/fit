@@ -34,7 +34,7 @@ const hasBlock = async (page: Page): Promise<boolean> => {
   // immediate count races the load and reports "no block" on an environment
   // that has one — which then silently skips every assertion below it.
   const calendar = page.getByRole("heading", { name: "Six weeks" });
-  const empty = page.getByText(/You have no training block yet/i);
+  const empty = page.getByRole("heading", { name: "How it works" });
   await expect(calendar.or(empty).first()).toBeVisible();
   return calendar.isVisible();
 };
@@ -133,7 +133,7 @@ test.describe("shell", () => {
 test.describe("overview", () => {
   test("says whether a block exists, either way", async ({ page }) => {
     await page.goto("/overview");
-    await expect(page.locator("main h1")).toHaveText("Overview");
+    await expect(page.locator("main h1")).toHaveText(/Overview|Start here/);
 
     // "Do I have a block?" was the least answerable question in the app, so
     // BOTH outcomes are asserted: a calendar, or a statement that there is
@@ -142,7 +142,12 @@ test.describe("overview", () => {
     if (has) {
       await expect(page.getByRole("heading", { name: "Six weeks" })).toBeVisible();
     } else {
-      await expect(page.getByRole("link", { name: /create one/i })).toBeVisible();
+      // The empty state is the FIRST screen a new account sees, since this is
+      // the default route. It has to teach the program and give exactly one
+      // action — "you have no block" states a fact and leaves the reader stuck.
+      await expect(page.locator("main h1")).toHaveText("Start here");
+      await expect(page.getByRole("heading", { name: "How it works" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Set your inputs" })).toBeVisible();
     }
   });
 
@@ -193,6 +198,54 @@ test.describe("block inputs", () => {
     }
   });
 
+  test("an accessory picker can be browsed, searched, and typed into", async ({ page }) => {
+    await page.goto("/block-inputs");
+    const field = page.locator("#slot-optional1");
+    const combobox = page.locator(".combobox").filter({ has: field });
+
+    // BROWSE. A `<datalist>` offered no way to see the options without first
+    // guessing part of a name, which is why it was unusable — this asserts the
+    // full list opens from a control.
+    await combobox.getByRole("button", { name: "Show all options" }).click();
+    const options = combobox.getByRole("option");
+    expect(await options.count()).toBeGreaterThan(10);
+
+    // SEARCH.
+    await field.fill("kettlebell");
+    await expect(options.first()).toContainText(/kettlebell/i);
+    const filtered = await options.count();
+    expect(filtered).toBeGreaterThan(0);
+
+    // PICK.
+    const chosen = (await options.first().innerText()).trim();
+    await options.first().click();
+    await expect(field).toHaveValue(chosen);
+
+    // TYPE ANYTHING. The source spreadsheet allowed free text, so a movement the
+    // list has never seen — which is every new one — must still be accepted.
+    await field.fill("Sandbag Carry");
+    await expect(field).toHaveValue("Sandbag Carry");
+  });
+
+  test("offers the estimated max as a starting point", async ({ page }) => {
+    await page.goto("/block-inputs");
+    const hint = page.getByText(/Estimated \d+ from/).first();
+    test.skip(!(await hint.isVisible()), "no logged sets to estimate from");
+
+    // Offered, never imposed: a max is a decision, and silently overwriting one
+    // would be the wrong kind of help.
+    await hint.getByRole("button", { name: "use" }).click();
+    await expect(page.locator("#squat")).not.toHaveValue("");
+  });
+
+  test("previews the six weeks the inputs produce", async ({ page }) => {
+    await page.goto("/block-inputs");
+    // "Which days does this land on?" is a question you ask BEFORE committing,
+    // so the calendar belongs here and not only on the overview.
+    await expect(page.getByRole("heading", { name: "What this produces" })).toBeVisible();
+    expect(await page.locator(".calendar .day").count()).toBeGreaterThan(10);
+  });
+
   test("names replacement as replacement, not as an edit", async ({ page }) => {
     await page.goto("/block-inputs");
     // Storage is append-only (ADR-0013), so there is no edit and no delete. The
@@ -223,7 +276,7 @@ test.describe("log", () => {
     await expect(page).toHaveURL(/[?&]day=\d+/);
   });
 
-  test("logging an exercise increments its set count", async ({ page }, testInfo) => {
+  test("logging a set increments the exercise's count", async ({ page }, testInfo) => {
     // LOCAL ONLY, and deliberately. This test WRITES, and the log is
     // append-only with no delete (ADR-0013) — running it against dev, test or
     // prod would permanently add sets nobody performed to a real training
@@ -234,10 +287,14 @@ test.describe("log", () => {
     await page.goto("/log");
     test.skip(!(await hasSessionPicker(page)), "environment has no block yet");
 
-    const row = page.locator(".exercise-row").first();
-    const tick = row.getByRole("button", { name: /As prescribed/ });
-    test.skip(!(await tick.isVisible()), "no fully-prescribed exercise in this session");
+    // The first INCOMPLETE exercise. Picking `.first()` blindly finds one whose
+    // sets are all logged from an earlier run — which still shows an empty
+    // extra-set row, so the click lands but has no prescribed reps to save and
+    // the count correctly does not move.
+    const row = page.locator(".exercise-row:not(.exercise-row--logged)").first();
+    test.skip(!(await row.isVisible()), "every exercise in this session is complete");
 
+    const tick = row.locator(".set-row:not(.set-row--done) .set-row__save").first();
     const before = Number((await row.locator(".pill").innerText()).split("/")[0]?.trim() ?? "0");
     await tick.click();
 
@@ -248,21 +305,64 @@ test.describe("log", () => {
         Number((await row.locator(".pill").innerText()).split("/")[0]?.trim() ?? "0"),
       )
       .toBeGreaterThan(before);
-    await expect(row).toHaveClass(/exercise-row--logged/);
+
+    // One SET, not one exercise. A four-set prescription needs four taps, so
+    // asserting the exercise went green here would be asserting the old
+    // behaviour this page was rebuilt to remove.
+    await expect(row.locator(".set-row--done").first()).toBeVisible();
   });
 
-  test("each exercise can be logged on its own and shows its set count", async ({ page }) => {
+  test("every prescribed set is its own row, with no disclosure control", async ({ page }) => {
     await page.goto("/log");
     test.skip(!(await hasSessionPicker(page)), "environment has no block yet");
-    const rows = page.locator(".exercise-row");
-    await expect(rows.first()).toBeVisible();
 
-    // Per-exercise submission is the whole point: the Google Form this replaces
-    // took one exercise per response, and that grain is what lets you tick work
-    // off mid-session and know where you are after a superset.
-    const first = rows.first();
-    await expect(first.locator(".pill")).toContainText(/sets/);
-    await expect(first.getByRole("button", { name: /Edit|Close/ })).toBeVisible();
+    const exercise = page.locator(".exercise-row").first();
+    await expect(exercise).toBeVisible();
+
+    // One row per prescribed set. A four-set prescription is four decisions
+    // made minutes apart, and the row you have not ticked is the answer to
+    // "where was I" — so collapsing them into one control loses the feature.
+    const rows = exercise.locator(".set-row");
+    expect(await rows.count()).toBeGreaterThan(0);
+
+    // The inputs are ALWAYS present on an unlogged row. An Edit button charged
+    // a click to the case that is not an exception: the reps you got are rarely
+    // the reps written down.
+    //
+    // Scoped to a row that is NOT yet logged — a completed row deliberately has
+    // no inputs, because there is nothing left to decide about it, and an
+    // environment where earlier tests have logged sets would otherwise fail
+    // here for the right behaviour.
+    const pending = exercise.locator(".set-row:not(.set-row--done)").first();
+    await expect(pending.locator("input").first()).toBeVisible();
+    await expect(exercise.getByRole("button", { name: /^Edit$/ })).toHaveCount(0);
+
+    // One tap per set, and the tap is the largest target in the row.
+    await expect(pending.getByRole("button", { name: /^Save / })).toBeVisible();
+  });
+
+  test("a set row is a single tap when the prescription is complete", async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "local", "writes real observations");
+    await page.goto("/log");
+    test.skip(!(await hasSessionPicker(page)), "environment has no block yet");
+
+    const exercise = page.locator(".exercise-row").first();
+    const row = exercise.locator(".set-row:not(.set-row--done)").first();
+    test.skip(!(await row.isVisible()), "every set in this exercise is already logged");
+
+    const reps = row.locator("input").nth(1);
+    test.skip((await reps.inputValue()) === "", "this set has no fixed rep target");
+
+    const before = await exercise.locator(".set-row--done").count();
+
+    // Pre-filled from the prescription, so the common case is ONE click: no
+    // typing, no expanding, no save-all at the end.
+    await row.getByRole("button", { name: /^Save / }).click();
+    await expect
+      .poll(async () => exercise.locator(".set-row--done").count())
+      .toBeGreaterThan(before);
   });
 });
 
@@ -375,15 +475,20 @@ test.describe("imported history", () => {
     }
   });
 
-  test("the exercise catalogue is its own page", async ({ page }) => {
+  test("the exercise catalogue is its own page, and a table only", async ({ page }) => {
     await page.goto("/exercises");
     await expect(page.locator("main h1")).toHaveText("Exercises");
-    const listed = await page
-      .getByRole("heading", { name: /movements/ })
-      .isVisible()
-      .catch(() => false);
-    test.skip(!listed, "this environment holds no imported history");
+
+    const listed = page.getByRole("heading", { name: /movements/ });
+    const empty = page.getByText(/No training history has been imported/i);
+    await expect(listed.or(empty).first()).toBeVisible();
+    test.skip(!(await listed.isVisible()), "this environment holds no imported history");
+
     await expect(page.locator("table")).toBeVisible();
+    // No charts. "Where does my volume go" belongs on the volume page, which has
+    // the filters and the time axis to answer it; here it only pushed the
+    // reference list below the fold.
+    await expect(page.locator(".plot")).toHaveCount(0);
   });
 
   test("a shared subpage URL opens in exactly the state it describes", async ({ page }) => {

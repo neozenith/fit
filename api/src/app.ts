@@ -167,23 +167,51 @@ const currentBlockOf = (items: Array<BlockConfig & Item>): BlockConfig | null =>
 };
 
 /**
- * Sets logged against each session of a block, keyed `week-day`.
+ * Sets logged against each session of a block, keyed `week-day` then exercise.
+ *
+ * The actual SETS, not a count. The log page marks off one prescribed set at a
+ * time, so it has to show what was recorded for each — a tally answers "how many
+ * have I done" but not "was set three the heavy one", which is the question in
+ * front of you when you pick the bar back up.
  *
  * Derived, never stored (ADR-0001): a set carries its own `blockId`/`week`/`day`
- * from the moment it is logged, so completion is a fold over observations rather
+ * from the moment it is logged, so progress is a fold over observations rather
  * than a status field that can disagree with them.
  */
 const sessionProgress = (records: SetRecord[], blockId: string) => {
-  const byExercise: Record<string, Record<string, number>> = {};
+  const byExercise: Record<string, Record<string, LoggedSet[]>> = {};
   for (const r of records) {
     if (r.blockId !== blockId || r.week === undefined || r.day === undefined) continue;
     const key = `${r.week}-${r.day}`;
     const session = byExercise[key] ?? {};
-    session[r.exercise] = (session[r.exercise] ?? 0) + 1;
+    const list = session[r.exercise] ?? [];
+    list.push({
+      timestamp: r.timestamp,
+      reps: r.reps,
+      ...(r.weight === undefined ? {} : { weight: r.weight }),
+      ...(r.setIndex === undefined ? {} : { setIndex: r.setIndex }),
+    });
+    session[r.exercise] = list;
     byExercise[key] = session;
+  }
+
+  // Chronological within an exercise. The query returns newest-first, and a set
+  // list that reads backwards is actively confusing when it is meant to line up
+  // with the prescription's own order.
+  for (const session of Object.values(byExercise)) {
+    for (const list of Object.values(session)) {
+      list.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    }
   }
   return byExercise;
 };
+
+interface LoggedSet {
+  timestamp: string;
+  reps: number;
+  weight?: number;
+  setIndex?: number;
+}
 
 const getCurrentBlock = async (ctx: Context): Promise<Response> => {
   const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");

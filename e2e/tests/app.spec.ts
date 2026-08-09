@@ -292,6 +292,19 @@ test.describe("imported history", () => {
     await expect(page.locator("table")).toBeVisible();
   });
 
+  test("a shared subpage URL opens in exactly the state it describes", async ({ page }) => {
+    await page.goto("/history");
+    test.skip(!(await hasImportedHistory(page)), "this environment holds no imported history");
+
+    await page.goto("/history/volume?grain=week&window=90d");
+    await expect(
+      page.getByRole("group", { name: "Grain" }).getByRole("button", { name: "Week" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByRole("group", { name: "Window" }).getByRole("button", { name: "90d" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   test("switching volume grain re-queries and re-renders", async ({ page }) => {
     await page.goto("/history");
     test.skip(!(await hasImportedHistory(page)), "this environment holds no imported history");
@@ -344,13 +357,20 @@ test.describe("every view is addressable", () => {
   });
 
   test("a shared URL opens in exactly the state it describes", async ({ page }) => {
-    await page.goto("/history/volume?grain=week&window=90d");
-    await expect(
-      page.getByRole("group", { name: "Grain" }).getByRole("button", { name: "Week" }),
-    ).toHaveAttribute("aria-pressed", "true");
-    await expect(
-      page.getByRole("group", { name: "Window" }).getByRole("button", { name: "90d" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    // Cost, not a history page: the FinOps filters render whether or not the
+    // export has landed, so this asserts the ROUTER contract without depending
+    // on an environment having data. The equivalent history assertion lives in
+    // the history suite, where it is correctly skipped when nothing is imported.
+    await page.goto("/finops?range=7d&groupBy=environment&chart=lines");
+    for (const [group, option] of [
+      ["Range", "7d"],
+      ["Group by", "Environment"],
+      ["Chart", "Lines"],
+    ] as const) {
+      await expect(
+        page.getByRole("group", { name: group }).getByRole("button", { name: option, exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+    }
   });
 });
 
@@ -376,10 +396,17 @@ test.describe("presentation", () => {
   });
 
   test("charts render as SVG, not as an empty container", async ({ page }) => {
-    await page.goto("/history/bodyweight");
+    // Progress rather than a history page: it draws from the LIVE log, which
+    // every environment has, so this proves Plotly actually loads and paints
+    // even where no archive has been imported.
+    await page.goto("/progress");
+    const chart = page.locator(".plot .main-svg").first();
+    const empty = page.getByText(/Log some sets and this chart fills in/i);
+    await expect(chart.or(empty).first()).toBeVisible({ timeout: 15_000 });
+    test.skip(await empty.isVisible(), "this environment has no logged sets to chart");
+
     // Plotly loads dynamically, so the container exists well before the chart
     // does. Counting real geometry is what distinguishes "drawn" from "mounted".
-    await expect(page.locator(".plot .main-svg").first()).toBeVisible({ timeout: 15_000 });
     expect(await page.locator(".plot path").count()).toBeGreaterThan(0);
   });
 });

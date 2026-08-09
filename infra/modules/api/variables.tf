@@ -39,20 +39,13 @@ variable "finops_bucket_arn" {
   default     = ""
 }
 
-variable "duckdb_layer_arn" {
+variable "duckdb_layer_dir" {
   description = <<-EOT
-    Lambda layer providing DuckDB, built for linux-arm64.
+    Directory holding the built DuckDB layer, zipped at plan time.
 
-    Required, with no default: the query path imports it at module scope so a
-    missing or wrong-architecture layer fails at cold start rather than on the
-    first cost query. `npm` and `bun` resolve the native binding for the BUILD
-    HOST, so this layer must be built in CI on linux-arm64 — one built on a
-    laptop ships a darwin binary and fails with a module-resolution error.
+    Produced by tools/build-duckdb-layer.sh and nothing else. The query path
+    imports DuckDB at module scope, so a missing or wrong-architecture layer
+    fails at cold start rather than on the first cost query.
   EOT
   type        = string
-
-  validation {
-    condition     = can(regex("^arn:aws:lambda:", var.duckdb_layer_arn))
-    error_message = "duckdb_layer_arn must be a Lambda layer ARN."
-  }
 }

@@ -9,9 +9,9 @@
 
 locals {
   cur_prefix = "cur"
-  # Data Exports writes to `{prefix}/{export-name}/data/...`, and the Glue
-  # crawler has to be pointed at exactly that path. Deriving it once here means
-  # the two cannot drift.
+  # Data Exports writes to `{prefix}/{export-name}/data/...`, and the API's
+  # Parquet glob has to point at exactly that path. Deriving it once here means
+  # the two cannot drift - see `finops.prefix` in infra/stacks/api/config.yml.
   cur_data_path = "${local.cur_prefix}/${var.name_prefix}/data"
 }
 
@@ -39,17 +39,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "cur" {
 
 resource "aws_s3_bucket_lifecycle_configuration" "cur" {
   bucket = aws_s3_bucket.cur.id
-
-  rule {
-    id     = "expire-athena-results"
-    status = "Enabled"
-    filter {
-      prefix = "athena-results/"
-    }
-    expiration {
-      days = 7
-    }
-  }
 
   rule {
     id     = "archive-old-billing-periods"

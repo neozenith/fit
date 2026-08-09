@@ -779,13 +779,25 @@ and continued. With no catalogue there is nothing to register, so the exception
 disappears rather than being justified.
 
 Newly archived data is queryable **immediately**, because writing the file *is*
-publishing it. A missing prefix returns zero rows instead of an error, so
-"the catalogue is not populated yet" stops being a state the API must model.
+publishing it.
 
-**What it costs.** A ~30MB Lambda layer, and one real trap: `npm`/`bun` resolve
-the native binding for the **build host**, so a layer built on macOS ships the
-darwin binary and fails at runtime with a module-resolution error. The layer
-must be built on linux-arm64, and CI is the only place that is guaranteed.
+**What it costs.** A 36MB Lambda layer and a build script, which turned out to
+carry three traps rather than the one anticipated:
+
+1. **`npm`/`bun` resolve the native binding for the build host.** A layer built
+   on macOS ships the darwin binary. The binding is an *optional dependency*
+   keyed on `os`/`cpu`, so the fix is `npm --os=linux --cpu=arm64 --libc=glibc`
+   — and `--include=optional`, without which npm resolves nothing for either
+   platform, exits 0, and produces a layer with no binary in it.
+2. **Only `parquet` is statically linked.** `httpfs` and `aws` are downloaded on
+   first use into `$HOME`, which Lambda mounts read-only — so the first S3 read
+   fails in the deployed environment and nowhere else. Both are baked into the
+   layer and autoinstall is disabled, so a missing bake fails loudly.
+3. **An empty glob is an error, not an empty result.** The claim above that "a
+   missing prefix returns zero rows" was wrong: `read_parquet` raises
+   `IO Error: No files found`. The API decides that case from a `glob()`
+   listing, which genuinely does return zero rows. Deciding it from the error
+   *text* would have reinstated the classifier this ADR set out to delete.
 
 > **Lens.** Match the query engine to the data's SIZE, not to its FORMAT.
 > "Parquet on S3" suggests a warehouse; kilobytes suggest a library. A managed

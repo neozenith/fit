@@ -11,7 +11,7 @@ variable "hot_window_months" {
   description = <<-EOT
     How much history stays in DynamoDB. Thirteen in the deployed environments,
     not twelve, so a year-on-year comparison is always answerable from the hot
-    path alone and never has to reach Athena (ADR-0012).
+    path alone and never has to reach the Parquet archive (ADR-0012).
   EOT
   type        = number
   default     = 13

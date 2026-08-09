@@ -14,9 +14,38 @@ data "archive_file" "bundle" {
   output_path = "${path.module}/.build/${var.name_prefix}-api.zip"
 }
 
+# The DuckDB layer (ADR-0025).
+#
+# A LAYER rather than a bundled dependency, so an application deploy re-uploads
+# kilobytes instead of 60MB. It carries the native binding AND the `httpfs` and
+# `aws` extensions, because Lambda has a read-only $HOME and DuckDB's default
+# behaviour is to download extensions into it on first use.
+#
+# The directory is built by tools/build-duckdb-layer.sh, which is the only thing
+# that can produce it correctly: `npm`/`bun` resolve the native binding for the
+# BUILD HOST, so anything assembled by an ordinary install on an x86 runner or a
+# macOS laptop ships the wrong architecture and fails at cold start with a
+# module-resolution error that never mentions architecture.
+data "archive_file" "duckdb_layer" {
+  type        = "zip"
+  source_dir  = var.duckdb_layer_dir
+  output_path = "${path.module}/.build/${var.name_prefix}-duckdb.zip"
+}
+
+resource "aws_lambda_layer_version" "duckdb" {
+  layer_name  = "${var.name_prefix}-duckdb"
+  description = "DuckDB for linux-arm64 with httpfs and aws pre-installed."
+
+  filename         = data.archive_file.duckdb_layer.output_path
+  source_code_hash = data.archive_file.duckdb_layer.output_base64sha256
+
+  compatible_runtimes      = ["nodejs22.x"]
+  compatible_architectures = ["arm64"]
+}
+
 resource "aws_lambda_function" "api" {
   function_name = "${var.name_prefix}-api"
-  description   = "fit API for ${var.environment}. Reads DynamoDB hot window, Athena cold archive."
+  description   = "fit API for ${var.environment}. DynamoDB hot window, Parquet cold archive via DuckDB."
 
   filename         = data.archive_file.bundle.output_path
   source_code_hash = data.archive_file.bundle.output_base64sha256
@@ -33,15 +62,7 @@ resource "aws_lambda_function" "api" {
 
   architectures = ["arm64"] # ~20% cheaper per GB-second than x86_64
 
-  # DuckDB, which replaced Glue and Athena (ADR-0025). A LAYER rather than a
-  # bundled dependency, so an application deploy re-uploads kilobytes instead of
-  # 30MB.
-  #
-  # It must be built for linux-arm64: npm and bun resolve the native binding for
-  # the BUILD HOST, so a layer built on a laptop ships the darwin binary and
-  # fails at cold start with a module-resolution error that says nothing about
-  # architecture.
-  layers = [var.duckdb_layer_arn]
+  layers = [aws_lambda_layer_version.duckdb.arn]
 
   environment {
     variables = {

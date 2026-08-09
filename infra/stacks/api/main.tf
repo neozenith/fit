@@ -19,14 +19,6 @@ data "aws_ssm_parameter" "archive_bucket" {
   name = "/${local.app_name}/${var.environment}/data/archive_bucket"
 }
 
-data "aws_ssm_parameter" "glue_database" {
-  name = "/${local.app_name}/${var.environment}/data/glue_database"
-}
-
-data "aws_ssm_parameter" "athena_workgroup" {
-  name = "/${local.app_name}/${var.environment}/data/athena_workgroup"
-}
-
 locals {
   region     = local.config.region
   account_id = data.aws_caller_identity.current.account_id
@@ -48,18 +40,19 @@ module "api" {
   account_id  = local.account_id
   region      = local.region
 
-  bundle_dir = var.bundle_dir
+  bundle_dir       = var.bundle_dir
+  duckdb_layer_dir = var.duckdb_layer_dir
 
   table_arns         = local.table_arns
   archive_bucket     = data.aws_ssm_parameter.archive_bucket.value
   archive_bucket_arn = "arn:aws:s3:::${data.aws_ssm_parameter.archive_bucket.value}"
-  glue_database      = data.aws_ssm_parameter.glue_database.value
-  athena_workgroup   = data.aws_ssm_parameter.athena_workgroup.value
 
-  finops_database  = local.config.finops.glue_database
-  finops_workgroup = local.config.finops.athena_workgroup
-  # Reconstructed by convention rather than read from the global stack, so an
-  # environment can deploy before the FinOps stack has ever run. The module
-  # omits the grant entirely when this is empty.
+  # Reconstructed by convention rather than read from the global stack's state
+  # or its SSM parameters, so an environment can deploy before the FinOps stack
+  # has ever run. Reading `/fit/global/finops/bucket` here would make every
+  # environment's API deploy depend on a stack it does not own — the API page
+  # then reports "no cost data" instead of failing the whole apply.
+  finops_bucket     = "${local.app_name}-finops-${local.account_id}"
   finops_bucket_arn = "arn:aws:s3:::${local.app_name}-finops-${local.account_id}"
+  finops_prefix     = local.config.finops.prefix
 }

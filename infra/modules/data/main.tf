@@ -89,7 +89,7 @@ resource "aws_dynamodb_table" "table" {
 }
 
 # --- Cold storage ------------------------------------------------------------
-# Parquet written by the archive job, queried through Athena. Separate bucket
+# Parquet written by the archive job, read directly by DuckDB. Separate bucket
 # from anything else so a lifecycle rule here can never touch application
 # assets, and so its cost line is unambiguous.
 

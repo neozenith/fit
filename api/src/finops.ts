@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { FINOPS_BUCKET, FINOPS_PREFIX } from "./const.js";
-import { parquetGlob, query } from "./query.js";
+import { parquetGlob, queryParquet } from "./query.js";
 import type { finopsQuerySchema } from "./schemas.js";
 
 /**
@@ -63,8 +63,10 @@ export const queryFinops = async (input: FinopsQuery) => {
   // range and the environment filter reach DuckDB as parameters rather than as
   // string concatenation.
   const column = GROUP_COLUMN[input.groupBy];
+  const glob = parquetGlob(FINOPS_BUCKET, FINOPS_PREFIX);
 
-  const rows = await query<CostRow>(
+  const rows = await queryParquet<CostRow>(
+    glob,
     `
     SELECT
       strftime(bill_billing_period_start_date, '%Y-%m') AS period,
@@ -77,14 +79,19 @@ export const queryFinops = async (input: FinopsQuery) => {
     GROUP BY period, ${column}
     ORDER BY period, cost DESC
     `,
-    [
-      parquetGlob(FINOPS_BUCKET, FINOPS_PREFIX),
-      from,
-      to,
-      input.environment ?? null,
-      input.environment ?? null,
-    ],
+    [glob, from, to, input.environment ?? null, input.environment ?? null],
   );
+
+  if (rows === null) {
+    // The stack exists but the first export has not landed. AWS delivers a CUR
+    // up to 24 hours after the export is defined, so this is the NORMAL state
+    // of a freshly applied account rather than a fault.
+    return {
+      available: false,
+      reason: "The cost export has been defined but AWS has not delivered any data yet.",
+      rows: [],
+    };
+  }
 
   return {
     available: true,

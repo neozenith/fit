@@ -9,7 +9,7 @@ output "table_arns" {
 }
 
 output "archive_bucket" {
-  description = "Bucket holding aged-out Parquet and Athena spill."
+  description = "Bucket holding aged-out Parquet and the curated history import."
   value       = aws_s3_bucket.archive.bucket
 }
 

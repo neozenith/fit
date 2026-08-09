@@ -17,3 +17,13 @@ variable "bundle_dir" {
   type        = string
   default     = "../../../api/dist"
 }
+
+variable "duckdb_layer_dir" {
+  description = <<-EOT
+    Directory holding the built DuckDB layer. Produced by
+    `make duckdb-layer` (tools/build-duckdb-layer.sh), which is the only thing
+    that resolves the linux-arm64 native binding correctly.
+  EOT
+  type        = string
+  default     = "../../../api/.layer"
+}

@@ -9,7 +9,6 @@
     "dev": "bun run --hot src/server.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-athena": "3.907.0",
     "@aws-sdk/client-dynamodb": "3.907.0",
     "@aws-sdk/client-ssm": "3.907.0",
     "@aws-sdk/lib-dynamodb": "3.907.0",

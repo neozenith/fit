@@ -70,6 +70,14 @@ typecheck: ## Typecheck every TypeScript workspace
 test: ## Run unit tests
 	bun test packages
 
+.PHONY: duckdb-layer
+duckdb-layer: ## Build the linux-arm64 DuckDB Lambda layer into api/.layer
+	# A SIBLING of `ci`, never a dependency: it needs npm and network access to
+	# two registries, which would make the offline gate stop being offline.
+	# CI builds it in the terraform composite action, right before the plan that
+	# hashes it.
+	./tools/build-duckdb-layer.sh
+
 .PHONY: ci
 ci: format-check lint typecheck test tf-check ## The gate before pushing. Free and offline.
 	@echo "==> ci green"

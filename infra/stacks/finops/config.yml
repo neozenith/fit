@@ -6,4 +6,3 @@
 
 app_name: fit
 region: ap-southeast-2
-athena_scan_limit_bytes: 10737418240

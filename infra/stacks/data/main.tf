@@ -13,6 +13,4 @@ module "data" {
   environment = var.environment
   name_prefix = local.name_prefix
   account_id  = data.aws_caller_identity.current.account_id
-
-  athena_scan_limit_bytes = local.env.athena_scan_limit_bytes
 }

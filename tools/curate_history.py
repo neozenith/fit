@@ -69,6 +69,15 @@ WEIGH_IN_EXERCISE = "Body Weight"
 # like comparison against a bilateral lift has to know.
 UNILATERAL = re.compile(r"\b(SA|Single Arm|Single Leg|each side)\b", re.IGNORECASE)
 
+# Movements whose name does not start with their equipment. Prefix matching
+# gets 38 of 40 right; these two it cannot, because "Romanian Dead Lift" and
+# "Push ups" describe the movement rather than the tool. An explicit table is
+# honest about that — the alternative is a growing regex that pretends to infer
+# something it is really just hardcoding.
+EQUIPMENT_OVERRIDES = {
+    "Romanian Dead Lift": "Barbell",
+}
+
 KNOWN_EQUIPMENT = (
     "Barbell",
     "Dumbbell",
@@ -255,7 +264,9 @@ def curate_cardio(workbook: Any) -> pl.DataFrame:
 
 
 def classify(name: str) -> dict[str, Any]:
-    equipment = next((e for e in KNOWN_EQUIPMENT if name.startswith(e)), None)
+    equipment = EQUIPMENT_OVERRIDES.get(name)
+    if equipment is None:
+        equipment = next((e for e in KNOWN_EQUIPMENT if name.startswith(e)), None)
     if equipment is None:
         equipment = "Bodyweight" if name in BODYWEIGHT_LOADED or ISOMETRIC.search(name) else "Other"
     return {

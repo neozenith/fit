@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import { FINOPS_BUCKET, FINOPS_PREFIX } from "./const.js";
 import { parquetGlob, queryParquet, toNumber } from "./query.js";
-import { FINOPS_RANGE_DAYS, type finopsQuerySchema } from "./schemas.js";
+import { type FINOPS_GRAINS, FINOPS_RANGE_DAYS, type finopsQuerySchema } from "./schemas.js";
 
 /**
  * Cost reporting, read from the GLOBAL FinOps export.
@@ -50,15 +50,74 @@ const GROUP_COLUMN: Record<FinopsQuery["groupBy"], string> = {
  * when the cost was actually incurred, and it is the only column that can answer
  * "what did yesterday cost".
  */
-const GRAIN_SQL: Record<"day" | "month", { trunc: string; format: string }> = {
+type Grain = (typeof FINOPS_GRAINS)[number];
+
+const GRAIN_SQL: Record<Grain, { trunc: string; format: string }> = {
+  hour: { trunc: "hour", format: "%Y-%m-%d %H:00" },
   day: { trunc: "day", format: "%Y-%m-%d" },
+  // ISO weeks, starting Monday, labelled by the week's first day so the axis
+  // sorts lexicographically like every other grain.
+  week: { trunc: "week", format: "%Y-%m-%d" },
   month: { trunc: "month", format: "%Y-%m" },
 };
 
-/** Daily detail stays legible up to about a quarter; past that it is noise. */
-const defaultGrain = (range: FinopsQuery["range"]): "day" | "month" => {
+/**
+ * A bucket width that yields a readable number of points for the range.
+ *
+ * Roughly 24-90 buckets in every case: an hourly view of a year is 8760 bars,
+ * and a monthly view of one day is a single bar. Naming the grain explicitly
+ * still overrides this — the URL can pin any pair.
+ */
+const defaultGrain = (range: FinopsQuery["range"]): Grain => {
   const days = FINOPS_RANGE_DAYS[range];
-  return typeof days === "number" && days <= 90 ? "day" : "month";
+  if (typeof days !== "number") return "month";
+  if (days <= 3) return "hour";
+  if (days <= 90) return "day";
+  return "week";
+};
+
+export interface Recency {
+  /** The newest usage timestamp in the export, ISO-8601 in UTC. */
+  latest: string | null;
+  /** Seconds between that timestamp and now. */
+  ageSeconds: number | null;
+  rows: number;
+}
+
+/**
+ * How stale the cost data is.
+ *
+ * Worth its own metric because every number on the page is silently a few hours
+ * old — AWS refreshes a CUR on its own cadence, so "today cost $0" is usually
+ * "today has not been delivered yet". Reporting the newest timestamp and its
+ * age turns that from a wrong answer into a stated one.
+ *
+ * Timestamps in a CUR are UTC with no offset recorded, which is why the API
+ * returns them suffixed `Z` rather than leaving the client to guess.
+ */
+export const finopsRecency = async (): Promise<Recency> => {
+  if (!FINOPS_BUCKET) return { latest: null, ageSeconds: null, rows: 0 };
+
+  const glob = parquetGlob(FINOPS_BUCKET, FINOPS_PREFIX);
+  const rows = await queryParquet<Record<string, unknown>>(
+    glob,
+    `
+    SELECT
+      strftime(max(line_item_usage_start_date), '%Y-%m-%dT%H:%M:%SZ') AS latest,
+      date_diff('second', max(line_item_usage_start_date), now()::TIMESTAMP) AS age_seconds,
+      count(*) AS rows
+    FROM read_parquet(?, hive_partitioning = true, union_by_name = true)
+    `,
+    [glob],
+  );
+
+  const row = rows?.[0];
+  if (!row) return { latest: null, ageSeconds: null, rows: 0 };
+  return {
+    latest: row["latest"] ? String(row["latest"]) : null,
+    ageSeconds: row["age_seconds"] == null ? null : toNumber(row["age_seconds"]),
+    rows: toNumber(row["rows"]),
+  };
 };
 
 interface CostRow {
@@ -98,7 +157,10 @@ export const queryFinops = async (input: FinopsQuery) => {
       ${column}                                                                 AS grouping_key,
       ROUND(SUM(line_item_unblended_cost), 6)                                   AS cost
     FROM read_parquet(?, hive_partitioning = true, union_by_name = true)
-    WHERE (? IS NULL OR line_item_usage_start_date >= current_date - CAST(? AS INTEGER))
+    -- Counted back from NOW, not from midnight. \`current_date - 1\` is a DATE,
+    -- so a "1d" range compared against it spanned up to 48 hours — invisible at
+    -- monthly grain and glaring the moment an hourly chart existed.
+    WHERE (? IS NULL OR line_item_usage_start_date >= now()::TIMESTAMP - CAST(? AS INTEGER) * INTERVAL 1 DAY)
       AND resource_tags['user_project'] = 'fit'
       AND (? IS NULL OR resource_tags['user_environment'] = ?)
     GROUP BY period, ${column}

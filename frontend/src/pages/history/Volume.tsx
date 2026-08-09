@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { api, type HistoryExercise, type HistoryVolumePoint } from "../../api.js";
-import { HistoryWindow, Segmented, SelectFilter } from "../../filters.jsx";
+import { api, type HistoryVolumePoint } from "../../api.js";
+import { useCatalogue, useExerciseSelection } from "../../catalogue.js";
+import { HistoryWindow, Segmented, SelectFilter, useHistoryWindow } from "../../filters.jsx";
 import { Plot, seriesColour, themeColour } from "../../plot.jsx";
 import { useQueryParam } from "../../router.jsx";
-import { PageGate, useExtent, useHistoryData } from "./shared.jsx";
+import { PageGate, Pending, useExtent, useHistoryData } from "./shared.jsx";
 
 /**
  * Training volume over time.
@@ -29,19 +29,20 @@ const GRAINS = [
 export const HistoryVolumePage = () => {
   const { extent, unavailable, loading } = useExtent();
   const [grain] = useQueryParam("grain", "month");
-  const [exercise] = useQueryParam("exercise", "");
-  const [catalogue, setCatalogue] = useState<HistoryExercise[]>([]);
+  const { exercises: catalogue } = useCatalogue();
+  const selection = useExerciseSelection(catalogue);
+  const [, windowParams] = useHistoryWindow(extent);
 
-  const { data, error, params } = useHistoryData(extent, (window) =>
-    api.historyVolume({ grain, ...(exercise ? { exercise } : {}), ...window }),
+  // The request key is the FULL parameter set. An earlier version keyed the
+  // fetch on the date window alone, so changing the grain or the exercise
+  // updated the URL and re-rendered the page while quietly showing the previous
+  // query's results — the exact failure this surface exists to avoid.
+  const { data, error, pending } = useHistoryData(
+    { grain, ...selection.params, ...windowParams },
+    (params) => api.historyVolume(params),
+    // Held until the extent is known, so a window preset is not sent unresolved.
+    !loading,
   );
-
-  useEffect(() => {
-    api
-      .historyExercises()
-      .then((r) => setCatalogue(r.available ? r.exercises : []))
-      .catch(() => setCatalogue([]));
-  }, []);
 
   const gate = PageGate({
     title: "Volume",
@@ -59,7 +60,7 @@ export const HistoryVolumePage = () => {
   // Forty exercises is forty legend entries, and the legend then takes more
   // vertical space than the chart. The theme has eight categorical colours, so
   // the top eight get their own trace and the rest are summed into "Other" —
-  // which is honest (nothing is dropped from the total) and keeps every colour
+  // honest, since nothing leaves the total, and it keeps every colour
   // distinguishable instead of cycling the palette five times over.
   const lifetime = new Map<string, number>();
   for (const p of points) lifetime.set(p.exercise, (lifetime.get(p.exercise) ?? 0) + p.volumeKg);
@@ -85,22 +86,19 @@ export const HistoryVolumePage = () => {
     name,
     x: periods,
     y: periods.map((period) => totals.get(`${period}|${name}`) ?? 0),
-    // Resolved to a literal, not handed over as `var(--muted)`: Plotly
-    // would render that as black with no complaint.
+    // Resolved to a literal, not handed over as `var(--muted)`: Plotly would
+    // render that as black with no complaint.
     marker: { color: name === "Other" ? themeColour("--muted", "#57525e") : seriesColour(i) },
     hovertemplate: `%{x}<br>${name}: %{y:,.0f}kg<extra></extra>`,
   }));
 
   // Truncated, and SAID so in the heading. Five years at daily grain is several
   // thousand rows; rendering them all makes a page nobody scrolls and a browser
-  // that stutters. Ordered by volume so the truncation drops the least, not the
-  // most recent.
+  // that stutters. Selected by volume so the truncation drops the least, then
+  // re-sorted chronologically — a Period column shuffled by size looks broken.
   const tableRows = [...points]
     .sort((a, b) => b.volumeKg - a.volumeKg)
     .slice(0, TABLE_LIMIT)
-    // Re-sorted chronologically AFTER truncating. Selecting by volume decides
-    // what survives; ordering by date decides how it reads, and a table with a
-    // Period column shuffled by size looks broken.
     .sort((a, b) => a.period.localeCompare(b.period) || b.volumeKg - a.volumeKg);
 
   return (
@@ -115,28 +113,45 @@ export const HistoryVolumePage = () => {
         <Segmented label="Grain" param="grain" fallback="month" options={GRAINS} />
         <HistoryWindow />
         <SelectFilter
+          label="Equipment"
+          param="equipment"
+          fallback=""
+          anyLabel="All equipment"
+          options={selection.equipmentOptions}
+        />
+        <SelectFilter
           label="Exercise"
           param="exercise"
           fallback=""
           anyLabel="All exercises"
-          options={catalogue.map((e) => ({ value: e.exercise, label: e.exercise }))}
+          options={selection.exerciseOptions}
         />
       </div>
 
       <section className="card">
         <h2>
-          {Math.round(total / 1000)}t moved
+          {total >= 1000 ? `${Math.round(total / 1000)}t` : `${Math.round(total)}kg`} moved
           <span className="muted">
             {" "}
-            across {periods.length} {grain}s
+            across {periods.length} {grain}
+            {periods.length === 1 ? "" : "s"}
           </span>
+          <Pending pending={pending} />
         </h2>
-        <Plot
-          title={`Training volume by ${grain}, stacked by exercise`}
-          data={traces}
-          layout={{ barmode: "stack", yaxis: { title: { text: "kg" } } }}
-          height={380}
-        />
+        {periods.length === 0 && !pending ? (
+          <p className="muted">Nothing recorded for these filters.</p>
+        ) : (
+          <Plot
+            title={`Training volume by ${grain}, stacked by exercise`}
+            data={traces}
+            layout={{
+              barmode: "stack",
+              yaxis: { title: { text: "kg" } },
+              ...(periods.length === 1 ? { bargap: 0.8 } : {}),
+            }}
+            height={380}
+          />
+        )}
       </section>
 
       <section className="card">
@@ -148,6 +163,7 @@ export const HistoryVolumePage = () => {
               — heaviest {TABLE_LIMIT} of {points.length} rows
             </span>
           )}
+          <Pending pending={pending} />
         </h2>
         <div className="table-scroll">
           <table>
@@ -173,9 +189,9 @@ export const HistoryVolumePage = () => {
             </tbody>
           </table>
         </div>
-        {params["from"] && (
+        {windowParams["from"] && (
           <p className="muted">
-            Window: {params["from"]} to {params["to"]}.
+            Window: {windowParams["from"]} to {windowParams["to"]}.
           </p>
         )}
       </section>

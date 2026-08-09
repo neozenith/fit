@@ -1,8 +1,8 @@
 import { api, type HistoryCardioWeek } from "../../api.js";
-import { HistoryWindow, Segmented } from "../../filters.jsx";
+import { HistoryWindow, Segmented, useHistoryWindow } from "../../filters.jsx";
 import { Plot, seriesColour } from "../../plot.jsx";
 import { useQueryParam } from "../../router.jsx";
-import { PageGate, useExtent, useHistoryData } from "./shared.jsx";
+import { PageGate, Pending, useExtent, useHistoryData } from "./shared.jsx";
 
 /**
  * Weekly cardio, with power normalised by the body weight of the time.
@@ -32,7 +32,12 @@ const METRIC_CONFIG: Record<
 export const HistoryCardioPage = () => {
   const { extent, unavailable, loading } = useExtent();
   const [metric] = useQueryParam("metric", "distance");
-  const { data, error } = useHistoryData(extent, (window) => api.historyCardio(window));
+  const [, windowParams] = useHistoryWindow(extent);
+  const { data, error, pending } = useHistoryData(
+    windowParams,
+    (params) => api.historyCardio(params),
+    !loading,
+  );
 
   const gate = PageGate({
     title: "Cardio",
@@ -66,6 +71,7 @@ export const HistoryCardioPage = () => {
         <h2>
           {totalKm.toLocaleString()}km
           <span className="muted"> over {totalHours}h in this window</span>
+          <Pending pending={pending} />
         </h2>
         <Plot
           title={`Weekly ${config.label.toLowerCase()}`}

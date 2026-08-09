@@ -19,15 +19,14 @@ import { chromium } from "@playwright/test";
 import { BASE_URLS, type EnvName, mintSession } from "./auth.js";
 
 const PAGES = [
-  ["today", "/today"],
-  ["block", "/block"],
+  ["overview", "/overview"],
+  ["block-inputs", "/block-inputs"],
   ["log", "/log"],
   ["body", "/measurements"],
   ["progress", "/progress"],
   ["exercises", "/exercises"],
   ["history", "/history"],
   ["history-volume", "/history/volume"],
-  ["history-bodyweight", "/history/bodyweight"],
   ["history-rep-maxes", "/history/rep-maxes"],
   ["history-cardio", "/history/cardio"],
   ["history-streaks", "/history/streaks"],

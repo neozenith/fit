@@ -131,7 +131,17 @@ resource "aws_bcmdataexports_export" "cur" {
           INCLUDE_RESOURCES                     = "TRUE"
           INCLUDE_MANUAL_DISCOUNT_COMPATIBILITY = "FALSE"
           INCLUDE_SPLIT_COST_ALLOCATION_DATA    = "FALSE"
-          TIME_GRANULARITY                      = "DAILY"
+
+          # HOURLY, not DAILY. The finer grain is what makes "what did the last
+          # three hours cost" answerable at all — under DAILY the export still
+          # emits sub-daily timestamps for some line items, which is worse than
+          # either extreme: the data looks hourly and is not, so an hourly chart
+          # would show real bars with holes AWS never intended as zeroes.
+          #
+          # It multiplies row count by roughly 24. At this account's volume that
+          # is a few megabytes a month, and the lifecycle rule below already
+          # moves billing periods past 400 days to Glacier IR.
+          TIME_GRANULARITY = "HOURLY"
 
           # Declared even though it is a default, because AWS SETS IT ANYWAY.
           # Omitted, the apply fails with "Provider produced inconsistent result

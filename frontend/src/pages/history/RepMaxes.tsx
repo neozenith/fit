@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, type HistoryRepMax } from "../../api.js";
+import { useCatalogue } from "../../catalogue.js";
 import { Banner, Loading } from "../../components.jsx";
-import { Segmented } from "../../filters.jsx";
-import { Plot, seriesColour } from "../../plot.jsx";
+import { Segmented, SelectFilter } from "../../filters.jsx";
 import { useQueryParam } from "../../router.jsx";
 
 /**
@@ -14,22 +14,53 @@ import { useQueryParam } from "../../router.jsx";
  * source workbook does the same thing, which is why its 3RM and 5RM columns hold
  * identical values for several lifts.
  *
- * No date window here, deliberately. A personal best is a lifetime fact; asking
- * for "the last 90 days of all-time bests" is a question with no meaning, and a
- * filter that quietly reframes a PB as a recent maximum is worse than no filter.
+ * A TABLE and no chart. This is a lookup — "what is my 5RM on front squat" — and
+ * a grouped bar chart over forty exercises answered it worse than the pivot did
+ * while taking three times the space. The measure switch changes what the cells
+ * CONTAIN rather than adding a second number to each, so a column of kilograms
+ * stays scannable.
+ *
+ * No date window either. A personal best is a lifetime fact; "the last 90 days
+ * of all-time bests" is a question with no meaning, and a filter that quietly
+ * reframes a PB as a recent maximum is worse than no filter at all.
  */
 
 const REPS = [1, 3, 5, 10, 12];
 
 const MEASURES = [
-  { value: "absolute", label: "kg" },
+  { value: "kg", label: "kg" },
   { value: "relative", label: "× bodyweight" },
+  { value: "date", label: "When" },
 ];
+
+const DAY_MS = 86_400_000;
+
+/**
+ * "34 days ago", "3 years ago".
+ *
+ * Relative because the useful question about a PB is how long it has stood, not
+ * which Tuesday it happened on. The absolute date stays in the cell's `title`
+ * so nothing is actually lost.
+ */
+const relativeAge = (iso: string): string => {
+  const days = Math.round((Date.now() - Date.parse(iso)) / DAY_MS);
+  if (!Number.isFinite(days)) return "—";
+  if (days < 1) return "today";
+  if (days < 30) return `${days} days ago`;
+  if (days < 365) {
+    const months = Math.round(days / 30);
+    return `${months} month${months === 1 ? "" : "s"} ago`;
+  }
+  const years = Math.round((days / 365) * 10) / 10;
+  return `${years} year${years === 1 ? "" : "s"} ago`;
+};
 
 export const HistoryRepMaxesPage = () => {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.historyRepMaxes>> | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [measure] = useQueryParam("measure", "absolute");
+  const [measure] = useQueryParam("measure", "kg");
+  const [equipment] = useQueryParam("equipment", "");
+  const { exercises: catalogue } = useCatalogue();
 
   useEffect(() => {
     api
@@ -49,8 +80,14 @@ export const HistoryRepMaxesPage = () => {
     );
   }
 
-  const relative = measure === "relative";
-  const rows = data.repMaxes;
+  const equipmentOf = new Map(catalogue.map((e) => [e.exercise, e.equipment]));
+  const equipmentOptions = [...new Set(catalogue.map((e) => e.equipment))]
+    .sort()
+    .map((value) => ({ value, label: value }));
+
+  const rows = equipment
+    ? data.repMaxes.filter((r) => equipmentOf.get(r.exercise) === equipment)
+    : data.repMaxes;
 
   const byExercise = new Map<string, Map<number, HistoryRepMax>>();
   for (const r of rows) {
@@ -62,25 +99,37 @@ export const HistoryRepMaxesPage = () => {
     entry.set(r.reps, r);
   }
 
-  // Ordered by the heaviest single, so the chart reads top-down by strength
-  // rather than alphabetically. A relative view reorders on ratio instead —
-  // which is the entire reason for offering it, since a 60kg pull-up and a
-  // 140kg deadlift are not comparable until divided by the body doing them.
-  const value = (r: HistoryRepMax | undefined): number | null =>
-    r ? (relative ? r.bodyweightRatio : r.weightKg) : null;
+  // Ordered by the heaviest single, so the table reads top-down by strength
+  // rather than alphabetically. The relative measure reorders on ratio instead,
+  // which is the entire reason for offering it: a 60kg pull-up and a 140kg
+  // deadlift are not comparable until divided by the body doing them.
+  const sortValue = (entry: Map<number, HistoryRepMax> | undefined): number => {
+    const one = entry?.get(1);
+    if (!one) return 0;
+    return measure === "relative" ? (one.bodyweightRatio ?? 0) : one.weightKg;
+  };
 
-  const exercises = [...byExercise.entries()]
-    .sort((a, b) => (value(b[1].get(1)) ?? 0) - (value(a[1].get(1)) ?? 0))
-    .map(([name]) => name);
+  const ordered = [...byExercise.entries()].sort((a, b) => sortValue(b[1]) - sortValue(a[1]));
 
-  const traces = REPS.map((reps, i) => ({
-    type: "bar",
-    name: `${reps}RM`,
-    x: exercises,
-    y: exercises.map((name) => value(byExercise.get(name)?.get(reps))),
-    marker: { color: seriesColour(i) },
-    hovertemplate: `%{x}<br>${reps}RM: %{y:.2f}${relative ? "×bw" : "kg"}<extra></extra>`,
-  }));
+  const render = (cell: HistoryRepMax | undefined): React.ReactNode => {
+    if (!cell) return "—";
+    if (measure === "date") {
+      return <span title={cell.achievedOn}>{relativeAge(cell.achievedOn)}</span>;
+    }
+    if (measure === "relative") {
+      return cell.bodyweightRatio === null ? (
+        // No weigh-in on or before the lift, so there is no body weight to
+        // divide by. A blank is honest; a ratio against today's weight would be
+        // a number that was never true.
+        <span title="No weigh-in recorded on or before this lift">—</span>
+      ) : (
+        <span title={`${cell.weightKg}kg on ${cell.achievedOn}`}>
+          {cell.bodyweightRatio.toFixed(2)}×
+        </span>
+      );
+    }
+    return <span title={`Achieved ${cell.achievedOn}`}>{cell.weightKg}kg</span>;
+  };
 
   return (
     <>
@@ -91,25 +140,21 @@ export const HistoryRepMaxesPage = () => {
       </p>
 
       <div className="filters">
-        <Segmented label="Measure" param="measure" fallback="absolute" options={MEASURES} />
+        <Segmented label="Show" param="measure" fallback="kg" options={MEASURES} />
+        <SelectFilter
+          label="Equipment"
+          param="equipment"
+          fallback=""
+          anyLabel="All equipment"
+          options={equipmentOptions}
+        />
       </div>
 
       <section className="card">
-        <h2>By exercise</h2>
-        <Plot
-          title="Rep maxes by exercise"
-          height={Math.max(360, exercises.length * 22)}
-          data={traces}
-          layout={{
-            barmode: "group",
-            yaxis: { title: { text: relative ? "× bodyweight" : "kg" } },
-            xaxis: { automargin: true, tickangle: -45 },
-          }}
-        />
-      </section>
-
-      <section className="card">
-        <h2>The numbers</h2>
+        <h2>
+          {ordered.length} movements
+          {equipment && <span className="muted"> with a {equipment.toLowerCase()}</span>}
+        </h2>
         <div className="table-scroll">
           <table>
             <thead>
@@ -121,32 +166,22 @@ export const HistoryRepMaxesPage = () => {
               </tr>
             </thead>
             <tbody>
-              {exercises.map((name) => (
+              {ordered.map(([name, byReps]) => (
                 <tr key={name}>
                   <td>{name}</td>
-                  {REPS.map((n) => {
-                    const cell = byExercise.get(name)?.get(n);
-                    return (
-                      <td key={n} className="mono">
-                        {cell ? (
-                          <>
-                            {cell.weightKg}kg
-                            {cell.bodyweightRatio !== null && (
-                              <span className="muted"> ×{cell.bodyweightRatio.toFixed(2)}bw</span>
-                            )}
-                            <span className="muted"> {cell.achievedOn}</span>
-                          </>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                    );
-                  })}
+                  {REPS.map((n) => (
+                    <td key={n} className="mono">
+                      {render(byReps.get(n))}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {ordered.length === 0 && (
+          <p className="muted">Nothing recorded in this equipment category.</p>
+        )}
       </section>
     </>
   );

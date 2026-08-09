@@ -27,6 +27,14 @@ const RANGES = [
   { value: "all", label: "All" },
 ];
 
+const GRAINS = [
+  { value: "", label: "Auto" },
+  { value: "hour", label: "Hour" },
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
+];
+
 const GROUPINGS = [
   { value: "service", label: "Service" },
   { value: "environment", label: "Environment" },
@@ -43,14 +51,74 @@ const ENVIRONMENTS = [
 /** "1 day", "2 days" — a heading reading "over 1 days" looks like a bug. */
 const unit = (n: number, word: string): string => (n === 1 ? word : `${word}s`);
 
+/**
+ * How stale the numbers are.
+ *
+ * Prominent because every figure on this page is silently a few hours old: AWS
+ * refreshes a CUR on its own cadence, so "today cost nothing" is almost always
+ * "today has not been delivered yet". Stating the newest timestamp and its age
+ * turns a wrong answer into a qualified one.
+ *
+ * The timestamp is UTC — a CUR records no offset — and it is labelled as such
+ * rather than being converted, because a reader comparing it against an AWS
+ * console that also shows UTC should not have to undo a conversion.
+ */
+const Recency = ({
+  recency,
+}: {
+  recency: { latest: string | null; ageSeconds: number | null; rows: number } | null;
+}) => {
+  if (!recency?.latest) return null;
+  const age = recency.ageSeconds ?? 0;
+  const hours = Math.floor(age / 3600);
+  const label =
+    age < 3600
+      ? `${Math.max(0, Math.floor(age / 60))} minutes`
+      : hours < 48
+        ? `${hours} hours`
+        : `${Math.floor(hours / 24)} days`;
+
+  // Beyond a day the export has almost certainly stopped, rather than merely
+  // lagging — worth flagging rather than reporting neutrally.
+  const stale = age > 36 * 3600;
+
+  return (
+    <section className="card">
+      <div className="grid">
+        <div>
+          <div className="muted">Most recent record</div>
+          <div className="stat-value mono">{recency.latest.replace("T", " ")}</div>
+          <div className="muted">UTC — a CUR records no offset</div>
+        </div>
+        <div>
+          <div className="muted">Delivery lag</div>
+          <div className={`stat-value${stale ? " status-warning" : ""}`}>{label} behind</div>
+          <div className="muted">
+            {stale ? "Longer than a refresh cycle; check the export." : "Within the usual cadence."}
+          </div>
+        </div>
+        <div>
+          <div className="muted">Rows in the export</div>
+          <div className="stat-value mono">{recency.rows.toLocaleString()}</div>
+          <div className="muted">Hourly granularity</div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
 const USD = (v: number): string =>
   v >= 1 ? `$${v.toFixed(2)}` : v > 0 ? `$${v.toFixed(4)}` : "$0";
 
 export const FinOpsPage = () => {
   const [range] = useQueryParam("range", "30d");
+  const [grain] = useQueryParam("grain", "");
   const [groupBy] = useQueryParam("groupBy", "service");
   const [environment] = useQueryParam("environment", "");
   const [chart] = useQueryParam("chart", "stacked");
+  const [recency, setRecency] = useState<Awaited<ReturnType<typeof api.finopsRecency>> | null>(
+    null,
+  );
 
   const [data, setData] = useState<Awaited<ReturnType<typeof api.finops>> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,15 +128,31 @@ export const FinOpsPage = () => {
     setLoading(true);
     setError(null);
     api
-      .finops({ range, groupBy, ...(environment ? { environment } : {}) })
+      .finops({
+        range,
+        groupBy,
+        ...(grain ? { grain } : {}),
+        ...(environment ? { environment } : {}),
+      })
       .then(setData)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [range, groupBy, environment]);
+  }, [range, grain, groupBy, environment]);
+
+  // Fetched once, not per filter change: recency does not vary with any of
+  // them, and re-running the whole-export scan on every range click would make
+  // the page's slowest query its most frequent one.
+  useEffect(() => {
+    api
+      .finopsRecency()
+      .then(setRecency)
+      .catch(() => setRecency(null));
+  }, []);
 
   const filters = (
     <div className="filters">
       <Segmented label="Range" param="range" fallback="30d" options={RANGES} />
+      <Segmented label="Bucket" param="grain" fallback="" options={GRAINS} />
       <Segmented label="Group by" param="groupBy" fallback="service" options={GROUPINGS} />
       <Segmented label="Environment" param="environment" fallback="" options={ENVIRONMENTS} />
       <Segmented
@@ -154,6 +238,8 @@ export const FinOpsPage = () => {
         hiding dev's from prod's page would only make the account total unexplainable.
       </p>
 
+      <Recency recency={recency} />
+
       {filters}
 
       <section className="card">
@@ -161,7 +247,7 @@ export const FinOpsPage = () => {
           {USD(total)}
           <span className="muted">
             {" "}
-            over {periods.length} {unit(periods.length, data?.grain === "day" ? "day" : "month")}
+            over {periods.length} {unit(periods.length, data?.grain ?? "period")}
             {environment ? ` in ${environment}` : ""}
           </span>
         </h2>
@@ -172,7 +258,7 @@ export const FinOpsPage = () => {
           </Banner>
         ) : (
           <Plot
-            title={`Cost by ${groupBy}, ${data?.grain === "day" ? "daily" : "monthly"}`}
+            title={`Cost by ${groupBy}, per ${data?.grain ?? "period"}`}
             height={380}
             data={traces}
             layout={{

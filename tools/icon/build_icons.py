@@ -3,34 +3,42 @@
 # requires-python = ">=3.11"
 # dependencies = ["fonttools>=4.53"]
 # ///
-"""Build the fit app-icon exploration: hand-authored SVG variants + rasterised PNGs.
+"""Build the `fit` mark: mountainscape + plotted series, as SVG and PNG.
 
-Why this exists
----------------
-The AI generations in `art/strava-icon/art_*.png` settled the *style*; this script
-settles the *geometry*. Everything downstream of a design decision here is
-deterministic: the same inputs always produce byte-identical SVGs, so a tweak is a diff
-rather than a re-roll, and the light and dark icons can never drift apart because both
-are projections of ONE geometry through the OsakaNights design tokens.
+Scope right now is the MARK ONLY — no wordmark. The typography is a separate design
+problem (parked in `tools/icon/wordmark.py`) and carrying it through every iteration
+added noise to a question that is purely about mountains and a line.
 
-The central idea, from the brief: the surname is Peak, and the mountains must also read
-as a line chart. Round 1 drew those as two stacked objects and they fought. Here the
-plotted series traces the front range's own ridgeline — one silhouette, two readings.
+The brief, taken from the two keeper generations:
+  art/strava-icon/art_20260809_161725_0.png  (light)
+  art/strava-icon/art_20260809_161752_0.png  (dark)
 
-Two forms come out of every variant, because they are genuinely different artifacts:
-  * icon   — wordless, the mark fills the square. This is the Strava OAuth app icon.
-  * lockup — the same mark scaled down with the Fraunces wordmark beneath it.
-A three-letter serif wordmark is unreadable at 32px; pretending otherwise is how an app
-icon ends up as grey mush in a list view.
+Five rules, each one a correction of a specific earlier mistake:
+
+1. THREE tones of purple for the ranges — a far, a middle and a near — not two.
+2. The series is a FOURTH purple. Not black, not white. It sits outside the three range
+   tones (darker than all of them on light, lighter than all of them on dark) so it
+   never reads as the edge of whatever mass it crosses, but it is unmistakably the same
+   hue family.
+3. The series is INDEPENDENT geometry. It does not trace any ridgeline. An earlier round
+   made the line follow the front ridge exactly, which collapsed the mountain and the
+   chart into a single shape and destroyed the double reading the whole mark exists for.
+4. The line and its nodes share ONE casing, painted in the background colour and drawn
+   entirely underneath them. This is what makes the series look cut out of the
+   mountainscape. Critically, the nodes do NOT each get their own ring on top — that
+   chops the line into segments. Non-summit nodes are the same colour as the line and
+   disappear into it; they read as thickenings, not as separate objects.
+5. Exactly ONE node has a visible border: the warm summit marker. Its border exists
+   because it is the only element whose fill differs from the line, and the border is
+   what stops it smearing into the line's silhouette.
 
 Requirements (hard — this script crashes rather than degrading):
-  * `art/strava-icon/fonts/Fraunces.ttf` — the variable font, outlined at build time.
   * `resvg` on PATH — rasterises SVG to PNG.
 
-Outputs, per variant and form, under art/strava-icon/svg/ and art/strava-icon/png/:
-  <variant>-<form>-light.svg / -dark.svg              solid themed background
-  <variant>-<form>-light-alpha.svg / -dark-alpha.svg  transparent background
-  <variant>-<form>-themed.svg                         CSS-variable version that flips
+Outputs, per variant, under art/strava-icon/svg/ and art/strava-icon/png/:
+  <variant>-light.svg / -dark.svg              solid themed background
+  <variant>-light-alpha.svg / -dark-alpha.svg  transparent background
+  <variant>-themed.svg                         CSS-variable version that flips itself
   matching PNGs at every size in SIZES
 """
 
@@ -39,12 +47,17 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from fontTools.pens.svgPathPen import SVGPathPen
-from fontTools.ttLib import TTFont
+from wordmark import (
+    FONT_LOCATION,
+    Wordmark,
+    outline_wordmark,
+    place,
+    tittle_centre,
+    wordmark_group,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 ART = ROOT / "art" / "strava-icon"
@@ -53,132 +66,51 @@ SVG_DIR = ART / "svg"
 PNG_DIR = ART / "png"
 
 CANVAS = 512
-SIZES = (512, 128, 32)
+SIZES = (512, 256, 128, 64, 32)
 
-# ── Design tokens ────────────────────────────────────────────────────────────
-# Lifted verbatim from the OsakaNights theme
-# (.claude/skills/richdocs/resources/themes/osakanights/design-tokens.json and its
-# projection in frontend/src/styles/tokens.css). Named by ROLE, so a theme change is a
-# value change in one table and never a hunt through path data.
+# ── Palette ──────────────────────────────────────────────────────────────────
+# Anchored on the OsakaNights theme (--accent is #5c4295 light / #c3b0fd dark), but the
+# reference generations are the authority on the tonal SPREAD: three range purples plus
+# a fourth for the series.
 #
-# OsakaNights fonts, for the record: display 'Fraunces', body 'Fira Sans',
-# mono 'JetBrains Mono'. The wordmark uses display.
+# The tonal order inverts between themes on purpose. The rule is not a fixed hex per
+# layer, it is "nearest carries the most contrast against the ground" — which means the
+# near range is the deepest purple on light and the brightest lilac on dark.
 
 THEMES: dict[str, dict[str, str]] = {
     "light": {
-        "bg": "#faf8f9",  # --bg          the ground
-        "ink": "#1c1a20",  # --fg          wordmark, and the plotted series
-        "front": "#5c4295",  # --accent      the front range
-        "rear": "#a78fd6",  # accent, lifted  the range behind it
-        "spark": "#c96900",  # --series-5    the one warm node, on the summit
+        "bg": "#faf8f9",  # --bg, and the casing colour
+        "far": "#c3b3ec",  # range furthest back — palest
+        "mid": "#8b74cf",  # middle range
+        "near": "#5c4295",  # nearest range — this IS the --accent token
+        "line": "#3a1a8c",  # the series: a fourth purple, deeper AND more saturated
+        "spark": "#c96900",  # --series-5, the single warm summit node
     },
     "dark": {
         "bg": "#101010",
-        "ink": "#ffffff",
-        "front": "#c3b0fd",
-        "rear": "#5c4295",
+        "far": "#3a2a63",
+        "mid": "#6b52ab",
+        "near": "#b79bff",
+        "line": "#dccbff",  # a fourth purple, lighter than every range
         "spark": "#ebb25f",
     },
 }
 
-# ── Wordmark ─────────────────────────────────────────────────────────────────
+# On the light ramp the series is NOT simply "the darkest purple". An earlier version
+# used #2a1359, which sits at roughly 8% luminance — and below about 15% luminance hue
+# is imperceptible, so a purple line reads as a black line. The fix was to lift the
+# three range tones to make room, then give the series more CHROMA than any of them
+# rather than just less lightness. Saturation is what carries hue at low luminance.
 
-WORDMARK = "Fit"
-# Fraunces is a variable font; pin the axis location so the outline is reproducible.
-# wght 700 for weight at small sizes, opsz 144 for display-optical proportions, and
-# SOFT/WONK at 0 to keep terminals crisp against the hard-edged mountain geometry.
-FONT_LOCATION = {"wght": 700.0, "opsz": 144.0, "SOFT": 0.0, "WONK": 0.0}
-
-
-@dataclass(frozen=True)
-class Wordmark:
-    """An outlined string: SVG path data plus the metrics needed to place it."""
-
-    path: str
-    width: float
-    upem: float
-    cap_height: float
-
-
-def outline_wordmark(text: str, tracking: float = 0.0) -> Wordmark:
-    """Outline `text` from Fraunces into SVG path data, in font units, y-up.
-
-    `tracking` is extra letterspacing in font units, applied between glyphs only.
-    """
-    if not FONT_PATH.exists():
-        raise SystemExit(
-            f"Fraunces not found at {FONT_PATH}.\n"
-            "Fetch it with:\n"
-            "  curl -sSL -o art/strava-icon/fonts/Fraunces.ttf \\\n"
-            "    'https://github.com/google/fonts/raw/main/ofl/fraunces/"
-            "Fraunces%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf'"
-        )
-
-    font = TTFont(FONT_PATH)
-    upem = float(font["head"].unitsPerEm)
-    cap_height = float(getattr(font["OS/2"], "sCapHeight", 0.7 * upem))
-    cmap = font.getBestCmap()
-    glyph_set = font.getGlyphSet(location=FONT_LOCATION)
-
-    parts: list[str] = []
-    pen_x = 0.0
-    for i, char in enumerate(text):
-        name = cmap.get(ord(char))
-        if name is None:
-            raise SystemExit(f"Fraunces has no glyph for {char!r}")
-        glyph = glyph_set[name]
-        pen = SVGPathPen(glyph_set)
-        glyph.draw(pen)
-        d = pen.getCommands()
-        if d:
-            parts.append(f'<path transform="translate({pen_x:.1f} 0)" d="{d}"/>')
-        pen_x += glyph.width + (tracking if i < len(text) - 1 else 0.0)
-
-    return Wordmark(path="".join(parts), width=pen_x, upem=upem, cap_height=cap_height)
-
-
-def wordmark_group(
-    mark: Wordmark, *, cx: float, baseline: float, cap_px: float, fill: str
-) -> str:
-    """Place the outlined wordmark: centred on `cx`, sitting on `baseline`, `cap_px` tall.
-
-    Sizing by CAP HEIGHT rather than em size is what keeps the wordmark optically
-    matched to the mountain geometry — em size is a typographic abstraction the
-    mountains know nothing about, and it varies between fonts for identical apparent size.
-    """
-    scale = cap_px / mark.cap_height
-    x = cx - (mark.width * scale) / 2.0
-    return (
-        f'<g fill="{fill}" transform="translate({x:.2f} {baseline:.2f}) '
-        f'scale({scale:.5f} {-scale:.5f})">{mark.path}</g>'
-    )
-
-
-# ── Geometry primitives ──────────────────────────────────────────────────────
+# ── Geometry ─────────────────────────────────────────────────────────────────
 
 Point = tuple[float, float]
+Peak = tuple[Point, float]  # apex, half-width
+
+BASE_Y = 402.0
 
 
-def range_path(ridge: list[Point], base_y: float) -> str:
-    """Close a ridgeline into a filled mountain range, dropping to `base_y` at each end.
-
-    When the ridge already starts and ends on `base_y` the drop is a no-op and the range
-    meets the ground on a slope. Round 2 ended its ridge mid-air, so the closing segments
-    rendered as vertical walls and the mark read as a flat-bottomed blob.
-    """
-    head = f"M{ridge[0][0]:.1f} {base_y:.1f}"
-    body = "".join(f"L{x:.1f} {y:.1f}" for x, y in ridge)
-    tail = f"L{ridge[-1][0]:.1f} {base_y:.1f}Z"
-    return f'<path d="{head}{body}{tail}"/>'
-
-
-def peak(apex: Point, half_width: float, base_y: float) -> str:
-    """A single sharp triangle — used for the range BEHIND.
-
-    Back peaks are drawn as narrow individual triangles rather than as one wide closed
-    ridge: a wide back ridge only ever shows as angular slabs poking out either side of
-    the front range, which reads as ribbons rather than distance.
-    """
+def peak_path(apex: Point, half_width: float, base_y: float = BASE_Y) -> str:
     ax, ay = apex
     return (
         f'<path d="M{ax - half_width:.1f} {base_y:.1f}'
@@ -186,199 +118,424 @@ def peak(apex: Point, half_width: float, base_y: float) -> str:
     )
 
 
-def series_line(ridge: list[Point], stroke: str, width: float) -> str:
-    pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in ridge)
+def mountain_range(peaks: list[Peak], fill: str, dy: float = 0.0) -> str:
+    """One tonal layer: overlapping opaque triangles sharing a baseline.
+
+    Opaque, never translucent. Overlapping semi-transparent violets invent a fourth and
+    fifth tone that no palette defines, which is how a controlled three-tone scheme
+    turns into grey soup.
+    """
+    body = "".join(peak_path((ax, ay + dy), w) for (ax, ay), w in peaks)
+    return f'<g fill="{fill}">{body}</g>'
+
+
+def series(
+    points: list[Point],
+    t: dict[str, str],
+    *,
+    stroke: float,
+    casing: float,
+    node_r: float,
+    spark_index: int,
+    spark_scale: float = 1.35,
+    casing_opacity: float = 1.0,
+    defer_spark: bool = False,
+    dy: float = 0.0,
+) -> str:
+    """The plotted series: one silhouette, cased once, with a single bordered node.
+
+    Draw order is the entire point of this function:
+
+      1. casing   — the polyline at (stroke + 2*casing) AND a disc at (node_r + casing)
+                    under every node, all in the BACKGROUND colour. Because this whole
+                    layer goes down first, the line and its nodes share one continuous
+                    outer edge and the mark appears punched through the mountains.
+      2. mark     — the polyline at `stroke` and a disc at `node_r` per node, all in the
+                    SAME line colour. Same colour + drawn after the casing means the
+                    nodes fuse into the line instead of being ringed by it. This is the
+                    correction: rings drawn on top chop the line at every dot.
+      3. summit   — the one warm node, which gets its own casing disc precisely because
+                    its fill differs from the line and it would otherwise smear into it.
+
+    `casing_opacity` below 1 lets the mountains bleed through the cut-out. It is applied
+    to the casing GROUP, never to the individual shapes: the polyline casing and the
+    node discs overlap heavily, and per-shape opacity would double-composite every
+    overlap into a darker rim, producing a lumpy outline instead of an even veil. Group
+    opacity flattens the union first, then fades it once.
+    """
+    pts = [(x, y + dy) for x, y in points]
+    poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    common = 'fill="none" stroke-linecap="round" stroke-linejoin="round"'
+
+    casing_layer = [
+        f'<polyline points="{poly}" {common} stroke="{t["bg"]}" '
+        f'stroke-width="{stroke + casing * 2:.1f}"/>'
+    ]
+    mark_layer = [
+        f'<polyline points="{poly}" {common} stroke="{t["line"]}" '
+        f'stroke-width="{stroke:.1f}"/>'
+    ]
+    for i, (x, y) in enumerate(pts):
+        if i == spark_index:
+            continue
+        casing_layer.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{node_r + casing:.1f}" fill="{t["bg"]}"/>'
+        )
+        mark_layer.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{node_r:.1f}" fill="{t["line"]}"/>'
+        )
+
+    sx, sy = pts[spark_index]
+    sr = node_r * spark_scale
+    casing_layer.append(
+        f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{sr + casing:.1f}" fill="{t["bg"]}"/>'
+    )
+    summit = "" if defer_spark else spark_node((sx, sy), t, node_r, spark_scale)
+
+    opacity = "" if casing_opacity >= 1.0 else f' opacity="{casing_opacity:g}"'
+    return f'<g{opacity}>{"".join(casing_layer)}</g>{"".join(mark_layer)}{summit}'
+
+
+def spark_node(
+    at: Point, t: dict[str, str], node_r: float, spark_scale: float = 1.35
+) -> str:
+    """The record marker on its own, so it can be re-ordered above the wordmark.
+
+    When the marker doubles as the dot on the `i`, the wordmark has to paint over the
+    series (otherwise the purple line cuts across the letterforms) — but the marker must
+    still sit on top of the letter it is completing. Splitting it out is what lets the
+    same shape be the last thing drawn without dragging the whole series up with it.
+    """
     return (
-        f'<polyline points="{pts}" fill="none" stroke="{stroke}" '
-        f'stroke-width="{width:.1f}" stroke-linecap="round" stroke-linejoin="round"/>'
+        f'<circle cx="{at[0]:.1f}" cy="{at[1]:.1f}" r="{node_r * spark_scale:.1f}" '
+        f'fill="{t["spark"]}"/>'
     )
 
 
-def series_nodes(
-    ridge: list[Point],
-    r: float,
-    fill: str,
-    spark_index: int,
-    spark: str,
-    *,
-    skip_ends: bool = True,
-) -> str:
-    """Data-point markers. The summit gets the one warm colour and a slightly larger dot.
-
-    Only the summit is enlarged: making every node bigger reads as decoration, whereas a
-    single outsized node reads as a record — which is the whole point of the mark.
-
-    `skip_ends` omits markers on the two ground anchors. Those points exist to land the
-    series on the baseline, not to represent a measurement, and dotting them puts two
-    heavy circles in the corners where they read as feet.
-    """
-    out = []
-    last = len(ridge) - 1
-    for i, (x, y) in enumerate(ridge):
-        if skip_ends and i in (0, last):
-            continue
-        is_spark = i == spark_index
-        out.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{(r * 1.3 if is_spark else r):.1f}" '
-            f'fill="{spark if is_spark else fill}"/>'
-        )
-    return "".join(out)
-
-
-# ── The shared ridgeline ─────────────────────────────────────────────────────
+# ── The mountainscape ────────────────────────────────────────────────────────
 #
-# The plotted series IS the front range's skyline: rising left to right through a
-# training block, spiking at a personal record, then settling. Both endpoints sit at the
-# extremes of the range, so the line has a visible domain instead of dangling in space.
+# Three ranges, far to near. Far is tallest and sits behind everything; near is lowest
+# and broadest. Apexes are deliberately off-phase between layers so no two ranges echo
+# each other's rhythm — which is what makes the overlaps read as depth rather than as a
+# repeated pattern.
 
-BASE_Y = 396.0
-
-# Both ends sit ON the baseline, so the range meets the ground on a slope and the
-# series has a visible domain. Interior points are the measurements; the summit is the
-# personal record. Index 5 is the summit; indices 0 and 8 are the ground anchors.
-RIDGE: list[Point] = [
-    (40.0, 396.0),
-    (96.0, 292.0),
-    (146.0, 330.0),
-    (206.0, 236.0),
-    (250.0, 284.0),
-    (308.0, 146.0),
-    (366.0, 260.0),
-    (416.0, 214.0),
-    (472.0, 396.0),
+# The far range is deliberately huge: it is the only layer with room to fill the upper
+# half of the square, and letting it tower over the series is what stops the icon
+# reading as a chart with scenery. Half-widths grow with the height so the flanks keep
+# roughly their original slope — raising an apex without widening its base turns a
+# mountain into a spike.
+FAR: list[Peak] = [
+    ((118.0, 104.0), 126.0),
+    ((252.0, 44.0), 150.0),
+    ((396.0, 86.0), 132.0),
 ]
-SPARK_INDEX = 5
-
-# The range behind: narrow, sharp, individually drawn triangles whose tips clear the
-# front ridge. Offset off the front summits so the two ranges never merely echo.
-BACK_PEAKS: list[tuple[Point, float]] = [
-    ((150.0, 214.0), 74.0),
-    ((262.0, 176.0), 86.0),
-    ((388.0, 158.0), 80.0),
-]
-
-# Thumbnail-first reduction: two dominant peaks and one deep valley between them.
-COARSE_RIDGE: list[Point] = [
-    (44.0, 396.0),
-    (168.0, 210.0),
-    (256.0, 300.0),
-    (330.0, 138.0),
-    (468.0, 396.0),
-]
-COARSE_SPARK = 3
-COARSE_BACK: list[tuple[Point, float]] = [((238.0, 190.0), 96.0)]
-
-
-# ── The five design directions ───────────────────────────────────────────────
+# Mid climbs, and — more importantly — moves OFF-PHASE from far.
 #
-# Every one carries the same DNA — opaque violet ranges, a ridgeline that doubles as a
-# plotted series, round data nodes, exactly one warm summit node. They differ in how
-# much of that survives, which is the actual open question.
+# Its summits previously sat at x=190 and x=326, symmetric about far's centre apex at
+# x=252. Two peaks straddling a third that way continue its flanks as one unbroken line,
+# and all three fuse into a single silhouette. The summits now sit near far's valleys
+# (roughly x=185 and x=324) but deliberately offset from the valley floors, because a
+# summit landing exactly in a valley merges just as badly in the opposite direction.
+MID: list[Peak] = [
+    ((60.0, 238.0), 104.0),
+    ((170.0, 168.0), 130.0),
+    ((300.0, 190.0), 122.0),
+    ((438.0, 210.0), 100.0),
+]
+NEAR: list[Peak] = [
+    ((126.0, 300.0), 118.0),
+    ((288.0, 258.0), 138.0),
+    ((424.0, 302.0), 104.0),
+]
+
+# Simplified mountainscape: the SAME three tones, five triangles instead of ten. The
+# reduction is in triangle count, never in tonal depth — dropping to two ranges would
+# cost a purple, which is the one thing the references are unambiguous about.
+FAR_S: list[Peak] = [((256.0, 134.0), 168.0)]
+MID_S: list[Peak] = [((146.0, 224.0), 134.0), ((376.0, 204.0), 140.0)]
+NEAR_S: list[Peak] = [((206.0, 288.0), 190.0), ((404.0, 300.0), 132.0)]
+
+# The plotted series, at three densities. All three describe the SAME gesture — a low
+# start, a dip, a climb, the record, then settling — so the comparison is about how much
+# measurement detail the mark carries, not about three different training stories.
+SERIES_9: list[Point] = [
+    (30.0, 350.0),
+    (92.0, 296.0),
+    (148.0, 324.0),
+    (212.0, 240.0),
+    (262.0, 284.0),
+    (322.0, 132.0),
+    (382.0, 244.0),
+    (436.0, 206.0),
+    (486.0, 252.0),
+]
+SERIES_7: list[Point] = [
+    (32.0, 352.0),
+    (100.0, 300.0),
+    (166.0, 246.0),
+    (232.0, 292.0),
+    (322.0, 132.0),
+    (404.0, 234.0),
+    (484.0, 260.0),
+]
+SERIES_5: list[Point] = [
+    (36.0, 348.0),
+    (132.0, 264.0),
+    (218.0, 306.0),
+    (322.0, 136.0),
+    (480.0, 246.0),
+]
+
+# The record node lifted so its CENTRE sits on the same horizontal as the far range's
+# centre apex (FAR[1] at y=44). The peak of the plotted series and the peak of the
+# mountainscape then share one sightline, which ties the two readings of the mark
+# together at exactly the point they both mean the same thing.
+FAR_APEX_Y = 44.0
+SERIES_5_CREST: list[Point] = [
+    *SERIES_5[:3],
+    (SERIES_5[3][0], FAR_APEX_Y),
+    SERIES_5[4],
+]
+
+SPARKS = {9: 5, 7: 4, 5: 3}
+
+# Series weight, settled last round: the chart leads and the mountains are its ground.
+HEAVY = {"stroke": 20.0, "casing": 12.0, "node_r": 20.0}
+
+
+# ── Two axes of variation ────────────────────────────────────────────────────
+#
+# Every cell below is the same palette, the same gesture and the same series weight.
+# Only two things move: how many data points the series carries, and how many triangles
+# the mountainscape is built from. Holding everything else fixed is what makes a
+# side-by-side mean anything.
+
+# ── Accent candidates ────────────────────────────────────────────────────────
+#
+# All drawn from the OsakaNights plotly series, scored in tmp/palette_analysis.py by
+# hue separation from the base violet and by WCAG contrast against the three surfaces
+# the accent actually touches (ground, near range, series purple).
+#
+# The finding that shapes this table: the wordmark spans BOTH the mountains and the open
+# ground, and those sit on opposite sides of the luminance range. Saturated accents win
+# against the ground and lose against the purple; pastel accents do the reverse. There
+# is no single winner, so these four bracket the trade rather than pretending to solve it.
+
+ACCENTS: dict[str, dict[str, str]] = {
+    # 133 deg from the violet — split-complementary. Current pick.
+    "amber": {"light": "#c96900", "dark": "#ebb25f"},
+    # 178 deg — the true complement, and the best separation from the series purple.
+    "lime": {"light": "#649803", "dark": "#6ba304"},
+    # Pastel warm: the strongest contrast against the near range on light (4.14:1).
+    "sand": {"light": "#e9b26a", "dark": "#e9b26a"},
+    # 110 deg, but the highest contrast against the light ground of any candidate.
+    "coral": {"light": "#dd5139", "dark": "#ec563d"},
+}
 
 Variant = Callable[[dict[str, str]], str]
 
 
-def back_range(t: dict[str, str], peaks: list[tuple[Point, float]]) -> str:
-    return f'<g fill="{t["rear"]}">{"".join(peak(a, w, BASE_Y) for a, w in peaks)}</g>'
+def mountains(t: dict[str, str], simple: bool = False, invert: bool = False) -> str:
+    """Paint the three ranges, back to front.
 
+    `invert` swaps which tone the FAR and NEAR ranges wear. With three tones that swap
+    is the only other arrangement there is — the middle range is its own mirror — so
+    this flag exhausts the axis rather than sampling it.
 
-def mark_ridge(t: dict[str, str]) -> str:
-    """A — the full statement. Two ranges, seven data points, the line IS the skyline."""
-    return (
-        back_range(t, BACK_PEAKS)
-        + f'<g fill="{t["front"]}">{range_path(RIDGE, BASE_Y)}</g>'
-        + series_line(RIDGE, t["ink"], 12.0)
-        + series_nodes(RIDGE, 13.0, t["ink"], SPARK_INDEX, t["spark"])
-    )
-
-
-def mark_summit(t: dict[str, str]) -> str:
-    """B — thumbnail-first. Two peaks, three data points, fatter stroke."""
-    return (
-        back_range(t, COARSE_BACK)
-        + f'<g fill="{t["front"]}">{range_path(COARSE_RIDGE, BASE_Y)}</g>'
-        + series_line(COARSE_RIDGE, t["ink"], 20.0)
-        + series_nodes(COARSE_RIDGE, 21.0, t["ink"], COARSE_SPARK, t["spark"])
-    )
-
-
-def mark_line(t: dict[str, str]) -> str:
-    """C — the chart alone. No filled mass; the peaks are implied entirely by the series.
-
-    The ground anchors are dropped here: with no range beneath it, a series that dives
-    into both bottom corners reads as a V, not as a skyline.
+    The default is atmospheric perspective: distant ranges wash out toward the ground
+    colour and near ones grow denser, which is the cue that makes the mark read as
+    landscape. Inverting trades that for flat figure-ground contrast, where the rearmost
+    shape shouts and the foreground recedes.
     """
-    floating = RIDGE[1:-1]
-    return series_line(floating, t["front"], 18.0) + series_nodes(
-        floating, 18.0, t["front"], SPARK_INDEX - 1, t["spark"], skip_ends=False
+    geometry = (FAR_S, MID_S, NEAR_S) if simple else (FAR, MID, NEAR)
+    tones = ("near", "mid", "far") if invert else ("far", "mid", "near")
+    return "".join(
+        mountain_range(peaks, t[tone]) for peaks, tone in zip(geometry, tones)
     )
 
 
-def mark_tile(t: dict[str, str]) -> str:
-    """D — the mark knocked out of a solid accent tile. Never vanishes on any surface.
+# ── Wordmark overlay ─────────────────────────────────────────────────────────
+#
+# The wordmark rides OVER the whole composition in the spark colour — the same warm tone
+# as the record node, so the type and the hero marker read as one accent system rather
+# than as two unrelated highlights. It is the only element allowed to break the purple.
+#
+# Sized by target WIDTH rather than cap height: the brief is that it runs across the
+# icon, so the span is the design intent and the resulting cap height is a consequence.
 
-    No back range and no opacity tricks: on a tile the ground is already the accent, so
-    a second violet behind the knockout has nothing to contrast against, and translucent
-    white over violet renders as the muddy grey round 2 produced.
+# The wordmark is set LARGE and prominent — roughly 79% of the square wide at cap 250 —
+# and it rides over the whole composition in the spark colour. Spark, not a fourth
+# purple and not the ground colour, so the type and the record node read as ONE accent
+# system rather than as two unrelated highlights. That is what earns it the top layer.
+#
+# Letterspacing was tried as a way to widen a three-letter word and abandoned: at the
+# tracking needed to span the square, the mountains show through the gaps and "F i t"
+# stops reading as a word.
+
+WORDMARK_CAP = 250.0
+WORDMARK_BASELINE = 330.0
+
+# The x the record marker occupied before it moved onto the tittle. Aligning the dot to
+# this column keeps the composition's vertical rhythm even though the word slides off
+# centre — the eye still reads a single axis running down through the peak.
+FORMER_SPARK_X = 322.0
+
+
+def axes(weight: float = 700.0, soft: float = 0.0, wonk: float = 1.0) -> dict[str, float]:
+    return {**FONT_LOCATION, "wght": weight, "SOFT": soft, "WONK": wonk}
+
+
+def load_mark(text: str, loc: dict[str, float]) -> Wordmark:
+    return outline_wordmark(FONT_PATH, text, location=loc)
+
+
+def wordmark_overlay(
+    t: dict[str, str], mark: Wordmark, fill_role: str = "spark", cx: float = CANVAS / 2
+) -> str:
+    """The wordmark, over everything.
+
+    `fill_role` exists because the tittle treatment forces the question: if the record
+    marker doubles as the dot on the `i` AND the word is spark-coloured, the marker
+    disappears into the letter it is completing. Setting the word in the series purple
+    keeps spark unique to the record, so one dot reads as both letter and personal best.
     """
-    return (
-        f'<rect x="0" y="0" width="512" height="512" rx="116" fill="{t["front"]}"/>'
-        + f'<g fill="{t["bg"]}">{range_path(RIDGE, BASE_Y)}</g>'
-        + series_line(RIDGE, t["front"], 13.0)
-        + series_nodes(RIDGE, 14.0, t["front"], SPARK_INDEX, t["spark"])
+    return wordmark_group(
+        mark, cx=cx, baseline=WORDMARK_BASELINE, cap_px=WORDMARK_CAP, fill=t[fill_role]
     )
 
 
-def mark_area(t: dict[str, str]) -> str:
-    """E — area chart as mountain. One mass, one line on its edge. The purest fusion."""
-    return (
-        f'<g fill="{t["rear"]}">{range_path(RIDGE, BASE_Y)}</g>'
-        + series_line(RIDGE, t["front"], 16.0)
-        + series_nodes(RIDGE, 17.0, t["front"], SPARK_INDEX, t["spark"])
+def tittle_point(text: str, loc: dict[str, float], cx: float) -> Point:
+    """Canvas coordinates of the dot on the `i`, for the given text and axis location.
+
+    Recomputed per axis location rather than measured once: a heavier or softer `i`
+    carries a differently sized dot at a different height, and WONK shifts it sideways.
+    A single hardcoded point would sit slightly off the tittle on every setting but one.
+    """
+    mark = load_mark(text, loc)
+    dot = tittle_centre(FONT_PATH, text, text.index("i"), location=loc)
+    return place(
+        mark, (dot[0], dot[1]), cx=cx, baseline=WORDMARK_BASELINE, cap_px=WORDMARK_CAP
     )
 
 
-VARIANTS: dict[str, Variant] = {
-    "a-ridge": mark_ridge,
-    "b-summit": mark_summit,
-    "c-line": mark_line,
-    "d-tile": mark_tile,
-    "e-area": mark_area,
+def cx_aligning_tittle(text: str, loc: dict[str, float], target_x: float) -> float:
+    """The wordmark centre that puts the tittle on `target_x`.
+
+    Solved rather than searched: `place` is affine, so shifting cx shifts the tittle by
+    exactly the same amount, and one evaluation gives the correction.
+    """
+    at_centre = tittle_point(text, loc, CANVAS / 2)[0]
+    return CANVAS / 2 + (target_x - at_centre)
+
+
+def _cell(
+    points: list[Point],
+    *,
+    simple: bool = False,
+    invert: bool = False,
+    casing_opacity: float = 1.0,
+    text: str | None = None,
+    weight: float = 700.0,
+    soft: float = 0.0,
+    wonk: float = 1.0,
+    tittle: bool = False,
+    text_fill: str = "spark",
+    align_tittle: bool = False,
+) -> Variant:
+    """One rendered cell.
+
+    `tittle=True` re-routes the series so its record vertex lands exactly on the dot of
+    the `i`, making the hero marker and the tittle the same object. The letterform then
+    completes the chart, and the chart completes the word.
+
+    `align_tittle=True` slides the whole word off centre so that dot lands on the column
+    the record marker used to occupy, trading a centred wordmark for a preserved
+    vertical axis.
+    """
+    loc = axes(weight, soft, wonk)
+    cx = CANVAS / 2
+    if text and align_tittle:
+        cx = cx_aligning_tittle(text, loc, FORMER_SPARK_X)
+    mark = load_mark(text, loc) if text else None
+    pts = list(points)
+    spark_at: Point | None = None
+    if tittle:
+        if text is None or "i" not in text:
+            raise SystemExit("tittle mode needs text containing an 'i'")
+        spark_at = tittle_point(text, loc, cx)
+        pts[SPARKS[len(points)]] = spark_at
+
+    def build(t: dict[str, str]) -> str:
+        body = mountains(t, simple, invert) + series(
+            pts,
+            t,
+            spark_index=SPARKS[len(points)],
+            casing_opacity=casing_opacity,
+            defer_spark=tittle,
+            **HEAVY,
+        )
+        if mark is not None:
+            body += wordmark_overlay(t, mark, text_fill, cx)
+        if spark_at is not None:
+            body += spark_node(spark_at, t, HEAVY["node_r"])
+        return body
+
+    return build
+
+
+# Settled so far: 5-point series, full massif, normal (atmospheric) depth ramp, tall far
+# range with mid off-phase beneath it.
+# Open axis: how much the cut-out around the series lets the mountains bleed through.
+# Variant keys never differ by CASE ALONE. macOS ships a case-insensitive filesystem by
+# default, so `crest-Fit` and `crest-fit` resolve to the same path and the second build
+# silently overwrites the first — a bug that is invisible locally until you compare the
+# renders, and that would not reproduce on a Linux CI box.
+# Locked in by now: lowercase "fit", the record marker doubling as the tittle, a 5-point
+# series, the full massif, and a 25% cut-out. Everything below varies exactly one thing.
+BASE = dict(points=SERIES_5, casing_opacity=0.25, text="fit", tittle=True)
+
+# Sheet 1 — the Fraunces variable axes. WONK is binary, so w700-s0-flat is the control
+# that shows what the wonk is actually contributing.
+AXIS_CELLS = {
+    "w400-s0": dict(weight=400.0, soft=0.0, wonk=1.0),
+    "w400-s100": dict(weight=400.0, soft=100.0, wonk=1.0),
+    "w700-s0": dict(weight=700.0, soft=0.0, wonk=1.0),
+    "w700-s100": dict(weight=700.0, soft=100.0, wonk=1.0),
+    "w900-s50": dict(weight=900.0, soft=50.0, wonk=1.0),
+    "w700-s0-flat": dict(weight=700.0, soft=0.0, wonk=0.0),
 }
 
-# Variants that paint their own ground and so must never receive a background rect.
-SELF_GROUNDED = {"d-tile"}
+# Sheet 2 — centred wordmark versus one slid across so the tittle sits on the column the
+# record marker used to occupy.
+ALIGN_CELLS = {
+    "centred": dict(align_tittle=False),
+    "offset": dict(align_tittle=True),
+}
 
-# ── Forms ────────────────────────────────────────────────────────────────────
-#
-# The mark is authored once at icon scale, occupying roughly y 138..392. The lockup is
-# that same group shrunk about a shared centre and lifted, with the wordmark beneath —
-# so the two forms can never disagree about what the mark looks like.
+# Sheet 3 — accent colour, on the settled composition.
+ACCENT_CELLS = {f"acc-{k}": dict(accent=k) for k in ACCENTS}
 
-LOCKUP_SCALE = 0.74
-LOCKUP_SHIFT_Y = -54.0
-
-# A full-bleed tile occupies the entire square by definition, so it needs a harder
-# reduction and a higher centre than an open mark before type can sit beneath it.
-LOCKUP_TILE_SCALE = 0.60
-LOCKUP_TILE_SHIFT_Y = -96.0
+VARIANT_ACCENT: dict[str, str] = {}
+VARIANTS: dict[str, Variant] = {}
 
 
-def compose(name: str, t: dict[str, str], form: str, mark: Wordmark) -> str:
-    body = VARIANTS[name](t)
-    if form == "icon":
-        return body
-    tiled = name in SELF_GROUNDED
-    scale = LOCKUP_TILE_SCALE if tiled else LOCKUP_SCALE
-    shift = LOCKUP_TILE_SHIFT_Y if tiled else LOCKUP_SHIFT_Y
-    inner = (
-        f'<g transform="translate(256 265) scale({scale}) '
-        f'translate(-256 {shift - 265:.1f})">{body}</g>'
-    )
-    return inner + wordmark_group(mark, cx=256, baseline=470, cap_px=88, fill=t["ink"])
+def register(name: str, **kw: object) -> None:
+    """Add a variant, peeling `accent` off into its own table.
+
+    The accent cannot ride inside the geometry closure: it has to be resolved per THEME
+    at emit time, and the CSS-variable build needs to bake it into the token block. So
+    the closure stays colour-agnostic and the accent is looked up by variant name.
+    """
+    VARIANT_ACCENT[name] = str(kw.pop("accent", "amber"))
+    VARIANTS[name] = _cell(**{**BASE, **kw})  # type: ignore[arg-type]
 
 
-FORMS = ("icon", "lockup")
+for _name, _kw in AXIS_CELLS.items():
+    register(_name, **_kw)
+for _name, _kw in ALIGN_CELLS.items():
+    register(_name, weight=400.0, soft=100.0, **_kw)
+for _name, _kw in ACCENT_CELLS.items():
+    register(_name, weight=400.0, soft=100.0, **_kw)
 
 # ── Emitters ─────────────────────────────────────────────────────────────────
 
@@ -388,18 +545,24 @@ HEADER = (
 )
 
 
-def literal_svg(name: str, form: str, theme: str, *, solid: bool) -> str:
-    """A flat SVG with concrete hex values — what rasterisers and Strava want."""
-    t = THEMES[theme]
-    bg = (
-        f'<rect width="512" height="512" fill="{t["bg"]}"/>'
-        if solid and name not in SELF_GROUNDED
-        else ""
-    )
-    return f"{HEADER}{bg}{compose(name, t, form, MARK)}</svg>"
+def tokens_for(name: str, theme: str) -> dict[str, str]:
+    """The theme palette with this variant's chosen accent substituted for `spark`."""
+    return {**THEMES[theme], "spark": ACCENTS[VARIANT_ACCENT[name]][theme]}
 
 
-def themed_svg(name: str, form: str) -> str:
+def literal_svg(name: str, theme: str, *, solid: bool) -> str:
+    """A flat SVG with concrete hex values — what rasterisers and Strava want.
+
+    On the transparent build the casing still paints in the theme's background colour:
+    the casing is structural, so dropping it would change the drawing rather than just
+    the ground. A transparent icon is therefore still a themed icon.
+    """
+    t = tokens_for(name, theme)
+    bg = f'<rect width="512" height="512" fill="{t["bg"]}"/>' if solid else ""
+    return f"{HEADER}{bg}{VARIANTS[name](t)}</svg>"
+
+
+def themed_svg(name: str) -> str:
     """A self-flipping SVG driven by CSS custom properties.
 
     Three theme states, exactly as tokens.css documents them: bare `:root` carries the
@@ -409,35 +572,25 @@ def themed_svg(name: str, form: str) -> str:
     hence the full light set first and dark blocks that only REDEFINE.
 
     CSS variables are a browser feature; rasterisers do not resolve them, which is
-    precisely why the literal pair above exists alongside this.
+    precisely why the literal builds exist alongside this one.
     """
-    light, dark = THEMES["light"], THEMES["dark"]
+    light, dark = tokens_for(name, "light"), tokens_for(name, "dark")
 
     def tokens(t: dict[str, str]) -> str:
         return "".join(f"--icon-{k}:{v};" for k, v in t.items())
 
     refs = {k: f"var(--icon-{k})" for k in light}
-    bg = (
-        '<rect width="512" height="512" fill="var(--icon-bg)"/>'
-        if name not in SELF_GROUNDED
-        else ""
-    )
     style = (
         f":root{{{tokens(light)}}}"
         f"@media(prefers-color-scheme:dark){{:root:not([data-theme='light'])"
         f"{{{tokens(dark)}}}}}"
         f":root[data-theme='dark']{{{tokens(dark)}}}"
     )
-    return f"{HEADER}<style>{style}</style>{bg}{compose(name, refs, form, MARK)}</svg>"
+    bg = '<rect width="512" height="512" fill="var(--icon-bg)"/>'
+    return f"{HEADER}<style>{style}</style>{bg}{VARIANTS[name](refs)}</svg>"
 
 
 def rasterise(svg: Path, out: Path, size: int) -> None:
-    """Rasterise with resvg.
-
-    No font arguments are passed, deliberately: the wordmark is already outlined to path
-    data at build time, so rendering has no text to resolve and cannot silently
-    substitute Times New Roman when Fraunces is absent from the system font database.
-    """
     subprocess.run(
         ["resvg", "--width", str(size), "--height", str(size), str(svg), str(out)],
         check=True,
@@ -457,29 +610,22 @@ def main() -> None:
 
     svgs = pngs = 0
     for name in VARIANTS:
-        for form in FORMS:
-            (SVG_DIR / f"{name}-{form}-themed.svg").write_text(
-                themed_svg(name, form), encoding="utf-8"
-            )
-            svgs += 1
-            for theme in THEMES:
-                for solid in (True, False):
-                    suffix = "" if solid else "-alpha"
-                    path = SVG_DIR / f"{name}-{form}-{theme}{suffix}.svg"
-                    path.write_text(
-                        literal_svg(name, form, theme, solid=solid), encoding="utf-8"
-                    )
-                    svgs += 1
-                    for size in SIZES:
-                        rasterise(path, PNG_DIR / f"{path.stem}@{size}.png", size)
-                        pngs += 1
+        (SVG_DIR / f"{name}-themed.svg").write_text(themed_svg(name), encoding="utf-8")
+        svgs += 1
+        for theme in THEMES:
+            for solid in (True, False):
+                suffix = "" if solid else "-alpha"
+                path = SVG_DIR / f"{name}-{theme}{suffix}.svg"
+                path.write_text(literal_svg(name, theme, solid=solid), encoding="utf-8")
+                svgs += 1
+                for size in SIZES:
+                    rasterise(path, PNG_DIR / f"{path.stem}@{size}.png", size)
+                    pngs += 1
 
     print(f"wrote {svgs} svg, {pngs} png", file=sys.stderr)
     print(f"  svg: {SVG_DIR.relative_to(ROOT)}")
     print(f"  png: {PNG_DIR.relative_to(ROOT)}")
 
-
-MARK = outline_wordmark(WORDMARK, tracking=0.0)
 
 if __name__ == "__main__":
     main()

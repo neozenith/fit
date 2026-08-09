@@ -64,12 +64,17 @@ export interface Window {
 /**
  * `(? IS NULL OR date >= ?)` twice over, as bound parameters.
  *
- * Written as a fragment plus a matching parameter builder so the two can never
- * drift: a WHERE clause and its parameter list edited in separate places is how
- * a filter silently starts binding the wrong column.
+ * A function of the column so a joined query can qualify it (`s.date`) without
+ * string-surgery on a constant — which worked only because the SQL happened to
+ * spell `DATE` in upper case and `date` in lower, and would have started
+ * corrupting the CAST the moment anyone reformatted it.
+ *
+ * Paired with a parameter builder so the two can never drift: a WHERE clause
+ * and its parameter list edited in separate places is how a filter silently
+ * starts binding the wrong column.
  */
-const WINDOW_SQL =
-  "(? IS NULL OR date >= CAST(? AS DATE)) AND (? IS NULL OR date <= CAST(? AS DATE))";
+const windowSql = (column = "date"): string =>
+  `(? IS NULL OR ${column} >= CAST(? AS DATE)) AND (? IS NULL OR ${column} <= CAST(? AS DATE))`;
 
 const windowParams = (w: Window): unknown[] => [
   w.from ?? null,
@@ -224,27 +229,42 @@ export interface VolumePoint {
 export const volume = async (
   grain: "day" | "week" | "month",
   exercise: string | undefined,
+  equipment: string | undefined,
   window: Window,
 ): Promise<{ available: true; grain: string; points: VolumePoint[] } | Unavailable> => {
   if (noBucket()) return UNAVAILABLE;
 
+  // Joined to the catalogue rather than inferred from the name. Equipment is a
+  // CURATED classification (tools/curate_history.py), including two overrides
+  // prefix-matching cannot get right, so re-deriving it here would give a
+  // different answer to the same question depending on which page asked.
   const rows = await queryParquet<Record<string, unknown>>(
     source("strength_sets"),
     `
     SELECT
-      strftime(date_trunc('${grain}', date), '%Y-%m-%d') AS period,
-      exercise                                           AS exercise,
-      COALESCE(sum(volume_kg), 0)                        AS volume_kg,
-      sum(sets)                                          AS sets,
-      max(weight_kg)                                     AS top_weight_kg
-    FROM read_parquet(?)
-    WHERE is_isometric = false
-      AND (? IS NULL OR exercise = ?)
-      AND ${WINDOW_SQL}
-    GROUP BY period, exercise
+      strftime(date_trunc('${grain}', s.date), '%Y-%m-%d') AS period,
+      s.exercise                                           AS exercise,
+      COALESCE(sum(s.volume_kg), 0)                        AS volume_kg,
+      sum(s.sets)                                          AS sets,
+      max(s.weight_kg)                                     AS top_weight_kg
+    FROM read_parquet(?) s
+    LEFT JOIN read_parquet(?) c ON c.exercise = s.exercise
+    WHERE s.is_isometric = false
+      AND (? IS NULL OR s.exercise = ?)
+      AND (? IS NULL OR c.equipment = ?)
+      AND ${windowSql("s.date")}
+    GROUP BY period, s.exercise
     ORDER BY period, volume_kg DESC
     `,
-    [source("strength_sets"), exercise ?? null, exercise ?? null, ...windowParams(window)],
+    [
+      source("strength_sets"),
+      source("exercises"),
+      exercise ?? null,
+      exercise ?? null,
+      equipment ?? null,
+      equipment ?? null,
+      ...windowParams(window),
+    ],
   );
   if (rows === null) return UNAVAILABLE;
 
@@ -366,7 +386,7 @@ export const bodyweight = async (
     WITH daily AS (
       SELECT date, avg(weight_kg) AS weight_kg, avg(bmi) AS bmi
       FROM read_parquet(?)
-      WHERE ${WINDOW_SQL}
+      WHERE ${windowSql()}
       GROUP BY date
     )
     SELECT
@@ -421,7 +441,7 @@ export const cardio = async (
     WITH activities AS (
       SELECT date, distance_m, moving_s, elevation_m, weighted_average_watts
       FROM read_parquet(?)
-      WHERE ${WINDOW_SQL}
+      WHERE ${windowSql()}
     ),
     weigh_ins AS (
       SELECT date, weight_kg FROM read_parquet(?)

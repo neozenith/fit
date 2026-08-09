@@ -72,12 +72,14 @@ a {
   flex-wrap: wrap;
 }
 
+/* The wordmark is the one place the display face and the accent both appear
+   without competing with anything: it is the app's name, not a heading. */
 .brand {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1.35rem;
   letter-spacing: -0.01em;
-  color: var(--fg);
+  color: var(--accent);
   text-decoration: none;
 }
 
@@ -90,19 +92,101 @@ a {
    wider than the viewport, taking the sidebar off-screen with it. */
 .body {
   display: grid;
-  grid-template-columns: 13rem minmax(0, 1fr);
+  grid-template-columns: var(--nav-width, 13rem) minmax(0, 1fr);
   align-items: start;
+}
+
+/* Collapsed is a RAIL, not a hidden nav: the sections stay reachable and the
+   current page stays highlighted. Hiding it entirely would trade a little
+   horizontal space for losing the sense of where you are. */
+.shell--collapsed .body {
+  --nav-width: 3.6rem;
+}
+
+.shell--collapsed .sidenav__label,
+.shell--collapsed .sidenav__heading,
+.shell--collapsed .theme-fieldset {
+  display: none;
+}
+
+.shell--collapsed .sidenav a {
+  text-align: center;
+  padding: var(--s2);
+}
+
+/* Two characters of the label, as an icon of last resort. A rail with nothing
+   in it is a column of empty boxes; `::before` keeps the accessible name in the
+   markup while giving the eye something to aim at. */
+.shell--collapsed .sidenav a::before {
+  content: attr(title);
+  display: block;
+  overflow: hidden;
+  max-width: 1.6rem;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.shell--collapsed .sidenav__group + .sidenav__group {
+  border-top: 1px solid var(--border);
+  padding-top: var(--s2);
 }
 
 .sidenav {
   position: sticky;
-  top: 3.4rem;
+  top: 3.6rem;
   align-self: start;
+  /* Full height minus the header, so the foot sits at the bottom of the column
+     rather than immediately under the last link. */
+  height: calc(100vh - 3.6rem);
   padding: var(--s4) var(--s3);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: var(--s4);
+  min-width: 0;
+}
+
+.sidenav__scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.sidenav__foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+}
+
+.sidenav__collapse {
+  font: inherit;
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidenav__collapse:hover {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.theme-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
   min-width: 0;
 }
 
@@ -226,11 +310,34 @@ main {
     display: inline-flex;
   }
 
+  /* A collapsed rail plus a drawer is two competing ideas; below this width the
+     drawer wins and the rail styles are switched off entirely. */
+  .shell--collapsed .body {
+    --nav-width: auto;
+  }
+
+  .shell--collapsed .sidenav__label,
+  .shell--collapsed .sidenav__heading,
+  .shell--collapsed .theme-fieldset {
+    display: revert;
+  }
+
+  .shell--collapsed .sidenav a::before {
+    content: none;
+  }
+
   .sidenav {
     display: none;
     position: static;
+    height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--border);
+  }
+
+  /* The collapse control is meaningless in a drawer — the drawer is already a
+     hide/show toggle, and a second one would fight it. */
+  .sidenav__collapse {
+    display: none;
   }
 
   .sidenav--open {
@@ -610,4 +717,225 @@ button:disabled {
 
 .plot .modebar-btn:hover path {
   fill: var(--fg);
+}
+
+/* An in-flight marker that sits beside a heading rather than replacing content.
+   Swapping a drawn chart for a spinner on every filter change makes the layout
+   jump and loses the very thing being compared against. */
+.pending {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-left: var(--s3);
+  animation: pending-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes pending-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+/* Respect a stated preference for less motion. A pulsing label is decoration;
+   the word "querying" carries the whole message on its own. */
+@media (prefers-reduced-motion: reduce) {
+  .pending {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* --- The block calendar ----------------------------------------------------- */
+
+/* Six weeks as a SHAPE, not a list. Seeing the shape is what makes a missing
+   week obvious; a chronological list of sessions never shows it. */
+.calendar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.calendar__week {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: center;
+  padding: var(--s2);
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+}
+
+.calendar__week--current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.calendar__label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.calendar__days,
+.session-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+/* One tile per session. Colour carries state, and the count carries detail —
+   colour alone would fail anyone who cannot distinguish these hues, which is
+   why every tile also states `n/m` and a title. */
+.day {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 5.2rem;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.day:hover {
+  border-color: var(--accent);
+}
+
+.day__date {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.day__name,
+.day__meta {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.day--done {
+  border-color: var(--status-good);
+  background: color-mix(in srgb, var(--status-good) 12%, var(--surface));
+}
+
+.day--partial {
+  border-color: var(--status-warning);
+  background: color-mix(in srgb, var(--status-warning) 12%, var(--surface));
+}
+
+.day--todo {
+  border-style: dashed;
+}
+
+.day--future {
+  opacity: 0.62;
+}
+
+.day--active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.legend-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s4);
+  padding: 0;
+  margin: var(--s3) 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.legend-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.swatch--done {
+  background: var(--status-good);
+}
+.swatch--partial {
+  background: var(--status-warning);
+}
+.swatch--todo {
+  background: var(--border);
+}
+.swatch--future {
+  background: var(--muted);
+  opacity: 0.5;
+}
+
+/* --- Logging ---------------------------------------------------------------- */
+
+.exercise-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.exercise-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s3);
+}
+
+/* A logged exercise is visually settled rather than hidden: mid-session you
+   still want to see what you did, especially when supersetting back to it. */
+.exercise-row--logged {
+  border-color: var(--status-good);
+  background: color-mix(in srgb, var(--status-good) 6%, transparent);
+}
+
+.exercise-row__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.exercise-row__form {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px dashed var(--border);
+}
+
+/* A link styled as a button. Real anchors keep ⌘-click and "copy link address"
+   working, which matters because these navigate. */
+.button {
+  display: inline-block;
+  padding: var(--s2) var(--s4);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.button:hover {
+  border-color: var(--accent);
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+@media (max-width: 40rem) {
+  .calendar__week {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

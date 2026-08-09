@@ -130,17 +130,20 @@ export const FINOPS_RANGE_DAYS: Record<string, number | null> = {
   all: null,
 };
 
+/** Bucket widths, coarsest-last. The export is HOURLY, so `hour` is real data. */
+export const FINOPS_GRAINS = ["hour", "day", "week", "month"] as const;
+
 export const finopsQuerySchema = z.object({
   range: z.enum(["1d", "3d", "7d", "30d", "90d", "all"]).default("30d"),
 
   /**
    * Bucket width. Omitted, it is derived from the range.
    *
-   * A daily bucket over five years is 1800 points of noise; a monthly bucket
-   * over three days is one bar. Deriving it means the common case needs no
-   * second parameter, and naming it means a URL can still pin an unusual pair.
+   * An hourly bucket over a year is 8760 points of noise; a monthly bucket over
+   * three hours is one bar. Deriving it means the common case needs no second
+   * parameter, and naming it means a URL can still pin an unusual pair.
    */
-  grain: z.enum(["day", "month"]).optional(),
+  grain: z.enum(FINOPS_GRAINS).optional(),
 
   /**
    * Restrict to one environment, or omit for all three.
@@ -177,6 +180,8 @@ export const historyVolumeQuerySchema = z.object({
   grain: z.enum(["day", "week", "month"]).default("month"),
   /** Restrict to one movement; omit for every exercise. */
   exercise: z.string().min(1).max(120).optional(),
+  /** Restrict to one equipment category, as classified by the curation step. */
+  equipment: z.string().min(1).max(60).optional(),
   ...historyWindowShape,
 });
 

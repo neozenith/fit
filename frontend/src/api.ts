@@ -53,6 +53,9 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   return body as T;
 };
 
+/** Sets logged per session, keyed `week-day` then exercise name. */
+export type BlockProgress = Record<string, Record<string, number>>;
+
 export interface Identity {
   email: string;
   actor: string;
@@ -76,7 +79,14 @@ export const api = {
   me: () => request<Identity>("/api/me"),
 
   currentBlock: () =>
-    request<{ block: BlockConfig | null; sessions: Session[] }>("/api/blocks/current"),
+    request<{
+      block: BlockConfig | null;
+      sessions: Session[];
+      /** Sets logged per session, keyed `week-day` then exercise name. */
+      progress: BlockProgress;
+      /** How many blocks exist at all — "never made one" vs "this is the live one". */
+      blockCount: number;
+    }>("/api/blocks/current"),
 
   blocks: () => request<{ blocks: BlockConfig[] }>("/api/blocks"),
 
@@ -133,6 +143,11 @@ export const api = {
       grain?: string;
       rows: Array<{ period: string; key: string; cost: number }>;
     }>(`/api/finops?${new URLSearchParams(params)}`),
+
+  finopsRecency: () =>
+    request<{ latest: string | null; ageSeconds: number | null; rows: number }>(
+      "/api/finops/recency",
+    ),
 
   // --- Imported history ------------------------------------------------------
   // Every one of these can answer `available: false` — the import is an

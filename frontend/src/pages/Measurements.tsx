@@ -1,18 +1,25 @@
 import type { MeasurementRecord } from "@fit/program";
 import { useCallback, useEffect, useState } from "react";
-import { api, type WeeklyMedian } from "../api.js";
+import { api, type HistoryBodyPoint, type WeeklyMedian } from "../api.js";
 import { Banner, formatDate, Loading } from "../components.jsx";
-import { LineSeriesPlot } from "../plot.jsx";
+import { HistoryWindow, useHistoryWindow } from "../filters.jsx";
+import { LineSeriesPlot, Plot, seriesColour } from "../plot.jsx";
 
 /**
- * Body metrics.
+ * Body metrics — recording them, and their whole history.
  *
- * The chart plots the WEEKLY MEDIAN, not the raw readings, and that is the
- * whole point of the page. A single post-meal weigh-in moves a mean by a
- * kilogram and makes a real downward trend invisible; the median simply ignores
- * it. The raw readings are still listed underneath, so nothing is hidden — only
- * de-emphasised.
+ * `/history/bodyweight` used to be a separate page, which meant answering "am I
+ * heavier than last year" required leaving the page where weight is recorded.
+ * The two are one activity, so they are one page: the form, the live log's
+ * weekly medians, and the five-year imported archive underneath.
+ *
+ * The live chart plots the WEEKLY MEDIAN rather than raw readings. A single
+ * post-meal weigh-in moves a mean by a kilogram and makes a real downward trend
+ * invisible; the median ignores it. The raw readings are still listed below, so
+ * nothing is hidden — only de-emphasised.
  */
+
+const DAY_MS = 86_400_000;
 export const MeasurementsPage = () => {
   const [records, setRecords] = useState<MeasurementRecord[]>([]);
   const [weekly, setWeekly] = useState<WeeklyMedian[]>([]);
@@ -20,6 +27,14 @@ export const MeasurementsPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState({ kind: "bodyWeight", value: "" });
+
+  // The imported archive, loaded alongside. Independent of the live log: an
+  // environment can have one, both or neither, and each section says so for
+  // itself rather than the page refusing to render.
+  const [archive, setArchive] = useState<HistoryBodyPoint[] | null>(null);
+  const [extent, setExtent] = useState<{ from: string; to: string } | null>(null);
+  const [, windowParams] = useHistoryWindow(extent);
+  const archiveKey = new URLSearchParams(windowParams).toString();
 
   // `useCallback` so the identity is stable across renders. Without it the
   // effect below would either re-run on every render or need a dependency list
@@ -39,6 +54,24 @@ export const MeasurementsPage = () => {
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   }, [load]);
+
+  useEffect(() => {
+    api
+      .historySummary()
+      .then((s) => setExtent(s.available ? { from: s.from, to: s.to } : null))
+      .catch(() => setExtent(null));
+  }, []);
+
+  // Keyed on the serialised window, not the object — `resolveHistoryWindow`
+  // returns a fresh object every render, and depending on it directly is an
+  // infinite request loop that presents as a permanently slow page.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on parameters
+  useEffect(() => {
+    api
+      .historyBodyweight(Object.fromEntries(new URLSearchParams(archiveKey)))
+      .then((r) => setArchive(r.available ? r.points : []))
+      .catch(() => setArchive([]));
+  }, [archiveKey]);
 
   const save = async () => {
     if (draft.value.trim() === "") {
@@ -76,6 +109,27 @@ export const MeasurementsPage = () => {
         .map((w) => ({ date: w.weekStart, value: w.waistCircumference as number })),
     },
   ].filter((s) => s.points.length > 0);
+
+  // An explicit null wherever more than three weeks passed with no reading.
+  // Plotly breaks a line on null; without it the gap is silently bridged.
+  const gapped = {
+    dates: [] as string[],
+    weights: [] as (number | null)[],
+    trend: [] as (number | null)[],
+  };
+  let previous = 0;
+  for (const point of archive ?? []) {
+    const at = Date.parse(point.date);
+    if (previous && at - previous > 21 * DAY_MS) {
+      gapped.dates.push(point.date);
+      gapped.weights.push(null);
+      gapped.trend.push(null);
+    }
+    gapped.dates.push(point.date);
+    gapped.weights.push(point.weightKg);
+    gapped.trend.push(point.trendKg);
+    previous = at;
+  }
 
   return (
     <>
@@ -123,6 +177,50 @@ export const MeasurementsPage = () => {
           <LineSeriesPlot series={series} yLabel="Weekly medians" />
         ) : (
           <p className="muted">Record a few measurements and a trend will appear here.</p>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>Imported history</h2>
+        <p className="muted">
+          Five years of weigh-ins from the tracker this app replaced. Read-only, and drawn with gaps
+          where nothing was recorded — a line across a three-year silence would show a climb nobody
+          measured.
+        </p>
+        <div className="filters">
+          <HistoryWindow />
+        </div>
+        {archive === null ? (
+          <p className="muted">Loading…</p>
+        ) : archive.length === 0 ? (
+          <p className="muted">No imported history in this environment.</p>
+        ) : (
+          <Plot
+            title="Imported body weight over time, with a 7-day mean"
+            height={360}
+            data={[
+              {
+                type: "scatter",
+                mode: "markers",
+                name: "Weigh-in",
+                x: gapped.dates,
+                y: gapped.weights,
+                marker: { color: seriesColour(5), size: 4, opacity: 0.55 },
+                hovertemplate: "%{x}<br>%{y:.1f}kg<extra></extra>",
+              },
+              {
+                type: "scatter",
+                mode: "lines",
+                name: "7-day mean",
+                x: gapped.dates,
+                y: gapped.trend,
+                line: { color: seriesColour(1), width: 2.5 },
+                connectgaps: false,
+                hovertemplate: "%{x}<br>%{y:.2f}kg<extra></extra>",
+              },
+            ]}
+            layout={{ yaxis: { title: { text: "kg" } } }}
+          />
         )}
       </section>
 

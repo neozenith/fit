@@ -13,7 +13,7 @@ import {
 } from "@fit/program";
 import { z } from "zod";
 import { ENVIRONMENT } from "./const.js";
-import { queryFinops } from "./finops.js";
+import { finopsRecency, queryFinops } from "./finops.js";
 import {
   bodyweight as historyBodyweight,
   bundle as historyBundle,
@@ -133,21 +133,76 @@ const getSessions = async (
 
 const findBlock = async (ctx: Context, blockId: string): Promise<BlockConfig | null> => {
   const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");
+  // Newest write first, so a superseded block resolves to its latest version.
   const found = items.find((b) => b.blockId === blockId);
   return found ? (stripKeys(found) as BlockConfig) : null;
 };
 
-/** The block whose six weeks contain today, or the most recent one before it. */
+/**
+ * The block whose six weeks contain today, or the most recent one before it.
+ *
+ * SUPERSEDE, not edit. Storage is append-only (ADR-0013) and the API role has
+ * no `DeleteItem`, so "fix the block I just made" is expressed as writing
+ * another one with the same start date — and the tie-break below is what makes
+ * the newer of the two win. Every earlier version stays queryable, which is the
+ * point of append-only: what you believed in March is still answerable.
+ */
+const currentBlockOf = (items: Array<BlockConfig & Item>): BlockConfig | null => {
+  const today = nowIso().slice(0, 10);
+  const started = items.filter((b) => b.startDate <= today);
+  const pool = started.length > 0 ? started : items;
+
+  const chosen = [...pool].sort(
+    (a, b) =>
+      b.startDate.localeCompare(a.startDate) ||
+      // Latest WRITE wins a tie on start date. Without this the winner is
+      // whichever `blockId` happened to sort last — a UUID, so effectively
+      // random, and a correction would take effect only half the time.
+      String((b as { createdAt?: string }).createdAt ?? "").localeCompare(
+        String((a as { createdAt?: string }).createdAt ?? ""),
+      ),
+  )[0];
+
+  return chosen ? (stripKeys(chosen) as BlockConfig) : null;
+};
+
+/**
+ * Sets logged against each session of a block, keyed `week-day`.
+ *
+ * Derived, never stored (ADR-0001): a set carries its own `blockId`/`week`/`day`
+ * from the moment it is logged, so completion is a fold over observations rather
+ * than a status field that can disagree with them.
+ */
+const sessionProgress = (records: SetRecord[], blockId: string) => {
+  const byExercise: Record<string, Record<string, number>> = {};
+  for (const r of records) {
+    if (r.blockId !== blockId || r.week === undefined || r.day === undefined) continue;
+    const key = `${r.week}-${r.day}`;
+    const session = byExercise[key] ?? {};
+    session[r.exercise] = (session[r.exercise] ?? 0) + 1;
+    byExercise[key] = session;
+  }
+  return byExercise;
+};
+
 const getCurrentBlock = async (ctx: Context): Promise<Response> => {
   const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");
-  const today = nowIso().slice(0, 10);
-  // Items come back newest-start-date first, so the first block that has
-  // already started is the current one.
-  const current = items.find((b) => b.startDate <= today) ?? items[0];
-  if (!current) return json({ block: null, sessions: [] });
+  const config = currentBlockOf(items);
+  if (!config) return json({ block: null, sessions: [], progress: {}, blockCount: items.length });
 
-  const config = stripKeys(current) as BlockConfig;
-  return json({ block: config, sessions: generateBlock(config) });
+  const logged = await queryByType<SetRecord>("sets", userKey(ctx.identity), "SET", {
+    limit: 2000,
+  });
+
+  return json({
+    block: config,
+    sessions: generateBlock(config),
+    progress: sessionProgress(logged.map(stripKeys) as SetRecord[], config.blockId),
+    // How many blocks exist at all. The difference between "you have never made
+    // one" and "you have five and this is the live one" is the first thing the
+    // overview needs to say, and it cannot be inferred from a single config.
+    blockCount: items.length,
+  });
 };
 
 /**
@@ -384,7 +439,9 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/history\/volume$/,
     handle: async (_ctx, _req, url) => {
       const q = historyVolumeQuerySchema.parse(Object.fromEntries(url.searchParams));
-      return json(await historyVolume(q.grain, q.exercise, { from: q.from, to: q.to }));
+      return json(
+        await historyVolume(q.grain, q.exercise, q.equipment, { from: q.from, to: q.to }),
+      );
     },
   },
   {
@@ -410,6 +467,14 @@ const ROUTES: Route[] = [
     method: "GET",
     pattern: /^\/api\/history\/streaks$/,
     handle: async () => json(await historyStreaks()),
+  },
+  // Separate from the cost query on purpose: recency does not vary with any
+  // filter, so bundling it would recompute the same answer on every range
+  // change and make the page's slowest query its most frequent one.
+  {
+    method: "GET",
+    pattern: /^\/api\/finops\/recency$/,
+    handle: async () => json(await finopsRecency()),
   },
   {
     method: "GET",

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api.js";
 import { Banner, Loading } from "../../components.jsx";
-import { useHistoryWindow } from "../../filters.jsx";
 
 /**
  * The scaffolding every history subpage shares.
@@ -49,48 +48,62 @@ export const useExtent = (): {
 };
 
 /**
- * Load one subpage's data once the window is resolvable.
+ * Fetch a subpage's data whenever ITS REQUEST CHANGES.
  *
- * The fetch is keyed on the SERIALISED parameters rather than on the object,
- * because `resolveHistoryWindow` returns a fresh object every render — keying on
- * it directly is an infinite request loop that looks like a slow page.
+ * The key is the serialised FULL parameter set, not just the date window. An
+ * earlier version keyed on the window alone, which meant changing the grain or
+ * the exercise updated the URL and re-rendered the page while quietly showing
+ * the previous query's results — the worst possible failure for a surface whose
+ * entire promise is that the URL describes what you see.
+ *
+ * `pending` is returned rather than inferred from `data === null`, because a
+ * refetch that keeps the previous data on screen is indistinguishable from one
+ * that has finished. Without it a filter change looks like it did nothing.
  */
 export const useHistoryData = <T,>(
-  extent: Extent | null,
+  params: Record<string, string>,
   fetcher: (params: Record<string, string>) => Promise<T>,
-): { data: T | null; error: string | null; params: Record<string, string> } => {
-  const [, params] = useHistoryWindow(extent);
+  /** Hold the request until the caller has what it needs to build `params`. */
+  ready = true,
+): { data: T | null; error: string | null; pending: boolean } => {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(true);
   const key = new URLSearchParams(params).toString();
 
-  // `fetcher` is an inline arrow at every call site, so it is a new reference
-  // on every render — depending on it would refetch continuously and defeat
-  // `key`, which is the serialised parameters and the only thing that changes
-  // what is actually requested.
+  // `fetcher` is an inline arrow at every call site, so it is a new reference on
+  // every render — depending on it would refetch continuously. `key` is the
+  // serialised parameters and the only thing that changes what is requested.
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on parameters
   useEffect(() => {
+    if (!ready) return;
     let cancelled = false;
+    setPending(true);
     fetcher(Object.fromEntries(new URLSearchParams(key)))
       .then((result) => {
-        if (!cancelled) setData(result);
+        if (cancelled) return;
+        setData(result);
+        setError(null);
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setPending(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [key]);
+  }, [key, ready]);
 
-  return { data, error, params };
+  return { data, error, pending };
 };
 
 /**
  * The empty and error states, rendered identically on every subpage.
  *
  * Returns `null` when there is something to draw, so a caller reads as
- * `const gate = <PageGate …/>; if (gate) return gate;` — one line rather than
+ * `const gate = PageGate(…); if (gate) return gate;` — one line rather than
  * three branches repeated six times.
  */
 export const PageGate = ({
@@ -129,3 +142,18 @@ export const PageGate = ({
   }
   return null;
 };
+
+/**
+ * An in-flight marker that does not move the page.
+ *
+ * Rendered beside a heading rather than replacing the chart: swapping a drawn
+ * chart for a spinner on every filter change makes the layout jump and loses
+ * the thing being compared against. `aria-live` announces it without stealing
+ * focus.
+ */
+export const Pending = ({ pending }: { pending: boolean }) =>
+  pending ? (
+    <span className="pending" aria-live="polite">
+      querying…
+    </span>
+  ) : null;

@@ -85,6 +85,24 @@ const CHECKS: Check[] = [
     // than rendering zeros.
     expect: (b) => (typeof b["available"] === "boolean" ? null : "no availability flag"),
   },
+  // Imported history. Like finops, `available: false` is a PASS — the import is
+  // an operator action, so an environment can be entirely healthy and hold none.
+  // What is checked is that the QUERY RAN: a 502 here means DuckDB, the layer or
+  // the S3 grant is broken, which is exactly what a smoke test is for.
+  ...[
+    "history",
+    "history/exercises",
+    "history/volume",
+    "history/rep-maxes",
+    "history/bodyweight",
+    "history/cardio",
+    "history/streaks",
+  ].map((slug) => ({
+    name: slug,
+    path: `/api/${slug}`,
+    expect: (b: Record<string, unknown>) =>
+      typeof b["available"] === "boolean" ? null : "no availability flag",
+  })),
 ];
 
 const main = async (): Promise<void> => {

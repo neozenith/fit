@@ -14,21 +14,31 @@ import type { finopsQuerySchema } from "./schemas.js";
  * Queried with DuckDB directly against S3 (ADR-0025). What used to be here — an
  * Athena start/poll/fetch loop, a 30-second ceiling, and a regex classifying one
  * vendor's free-text failure strings to tell "no table yet" from "access
- * denied" — is gone. A missing prefix now simply returns zero rows.
+ * denied" — is gone. "The export has not landed yet" is now decided by LISTING
+ * the prefix, which is a fact rather than an interpretation.
  */
 
 type FinopsQuery = z.infer<typeof finopsQuerySchema>;
 
 /**
- * Column in the CUR that carries each grouping.
+ * The expression in the CUR that carries each grouping.
  *
- * The tag columns are prefixed and lower-cased by the export, which is why
- * these are not simply `Environment` and `Stack`.
+ * Tags are a `MAP(VARCHAR, VARCHAR)` column, NOT flattened into
+ * `resource_tags_user_*` columns. That flattening was the Glue crawler's doing,
+ * and it left with the crawler (ADR-0025) — reading the export directly means
+ * reading the map. Keys are lower-cased and prefixed by AWS, so the `Project`
+ * tag arrives as `user_project`.
+ *
+ * `stack` resolves to NULL today and that is an ACCOUNT limitation, not a bug:
+ * this is a linked account, so cost-allocation tag activation belongs to the
+ * payer, and only `Project` and `Environment` have been activated there. Every
+ * resource already carries `Stack` via provider default_tags, so the grouping
+ * starts working the moment the payer activates it — with no change here.
  */
 const GROUP_COLUMN: Record<FinopsQuery["groupBy"], string> = {
   service: "line_item_product_code",
-  environment: "resource_tags_user_environment",
-  stack: "resource_tags_user_stack",
+  environment: "resource_tags['user_environment']",
+  stack: "resource_tags['user_stack']",
 };
 
 const monthsAgo = (n: number): string => {
@@ -74,8 +84,8 @@ export const queryFinops = async (input: FinopsQuery) => {
       ROUND(SUM(line_item_unblended_cost), 4)           AS cost
     FROM read_parquet(?, hive_partitioning = true, union_by_name = true)
     WHERE strftime(bill_billing_period_start_date, '%Y-%m') BETWEEN ? AND ?
-      AND resource_tags_user_project = 'fit'
-      AND (? IS NULL OR resource_tags_user_environment = ?)
+      AND resource_tags['user_project'] = 'fit'
+      AND (? IS NULL OR resource_tags['user_environment'] = ?)
     GROUP BY period, ${column}
     ORDER BY period, cost DESC
     `,

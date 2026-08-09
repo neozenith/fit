@@ -151,3 +151,11 @@ make entra                     # AFTER identity exists; re-run seeds all three e
   after apply". It is declared explicitly, derived from the account id
   (`arn:aws:billing::{account}:billingview/primary`), so planned and applied
   agree.
+- **A new SSM parameter breaks the tag deploy's `api` plan, once.** Per-stack
+  workflows run in PARALLEL on a tag, so when `api` starts reading a parameter
+  that `data` has only just begun creating, `plan / prod` fails with
+  `reading SSM Parameter (…): couldn't find resource`. It is the cold-start
+  ordering problem (ADR-0022) arriving on an established environment rather than
+  an empty one. The fix is the same both times: let `data` finish, then re-run
+  the `api` workflow. Adding a cross-stack parameter is therefore a **two-pass
+  deploy**, and worth saying so in the tag message.

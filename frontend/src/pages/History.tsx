@@ -188,6 +188,9 @@ export const HistoryPage = () => {
         <LineChart
           height={240}
           yLabel="kg"
+          // Weigh-ins stop for years at a time. Bridging those gaps with a
+          // straight line would show a climb that was never measured.
+          maxGapDays={21}
           series={[
             {
               name: "Weight",
@@ -261,6 +264,7 @@ export const HistoryPage = () => {
         <LineChart
           height={200}
           yLabel="W/kg"
+          maxGapDays={35}
           series={[
             {
               name: "Weighted avg W/kg",

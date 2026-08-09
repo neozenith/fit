@@ -138,14 +138,44 @@ export const Loading = ({ what }: { what: string }) => (
  * larger than the entire rest of this bundle. Colours come from the theme's
  * categorical tokens so it inverts with everything else.
  */
+const DAY_MS = 86_400_000;
+
+/** Split a series wherever the sampling gap exceeds the tolerance. */
+const splitOnGaps = (
+  points: Array<{ date: string; value: number }>,
+  maxGapDays?: number,
+): Array<Array<{ date: string; value: number }>> => {
+  if (maxGapDays === undefined || points.length === 0) return [points];
+  const segments: Array<Array<{ date: string; value: number }>> = [[]];
+  let previous: number | null = null;
+  for (const point of points) {
+    const at = Date.parse(point.date);
+    if (previous !== null && at - previous > maxGapDays * DAY_MS) segments.push([]);
+    (segments.at(-1) as Array<{ date: string; value: number }>).push(point);
+    previous = at;
+  }
+  return segments.filter((s) => s.length > 0);
+};
+
 export const LineChart = ({
   series,
   height = 220,
   yLabel = "",
+  maxGapDays,
 }: {
   series: Array<{ name: string; colour: string; points: Array<{ date: string; value: number }> }>;
   height?: number;
   yLabel?: string;
+  /**
+   * Break the line when consecutive points are further apart than this.
+   *
+   * A line asserts continuity. Across a three-year gap in weigh-ins it drew one
+   * straight segment from 92kg to 99kg, which reads as steady gain and is a
+   * claim the data does not make — the truth is that nothing was recorded. Left
+   * undefined the line is unbroken, which is right for a series sampled at a
+   * regular cadence.
+   */
+  maxGapDays?: number;
 }) => {
   const all = series.flatMap((s) => s.points);
   if (all.length === 0) return <p className="muted">Nothing logged yet.</p>;
@@ -193,13 +223,18 @@ export const LineChart = ({
         ))}
         {series.map((s) => (
           <g key={s.name}>
-            <polyline
-              fill="none"
-              stroke={s.colour}
-              strokeWidth={2}
-              strokeLinejoin="round"
-              points={s.points.map((p) => `${x(p.date)},${y(p.value)}`).join(" ")}
-            />
+            {splitOnGaps(s.points, maxGapDays).map((segment, i) => (
+              <polyline
+                // Index: two segments can legitimately start on the same date
+                // once a series is filtered, and a date key would drop one.
+                key={`${s.name}-seg-${i}`}
+                fill="none"
+                stroke={s.colour}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                points={segment.map((p) => `${x(p.date)},${y(p.value)}`).join(" ")}
+              />
+            ))}
             {s.points.map((p, i) => (
               // Index, not `date-value`: two weeks with the same median produce
               // an identical composite key, and React silently drops the

@@ -943,3 +943,68 @@ feature added to charts is added to all of them.
 > grow interaction. Count the *behaviours* being reimplemented, not the lines:
 > hover, zoom, legend and axis formatting are a library's worth of work
 > whatever the file size says.
+
+## ADR-0029 — A block is superseded, never edited or deleted
+
+**Status:** Accepted — a consequence of ADR-0013, made explicit
+
+**Context.** "Can I delete or reset a block that has started?" had no answer
+anywhere in the UI, which meant the honest answer — *no, and here is what to do
+instead* — was indistinguishable from a missing feature.
+
+Storage is append-only (ADR-0013) and the API role has no `DeleteItem`, so
+neither editing nor deleting is available and neither should be added: the
+guarantee that "what did I believe in March" stays answerable is worth more than
+the convenience of a destructive edit.
+
+**Decision.** Creating a block with an existing start date **supersedes** it.
+The API resolves the current block as the latest start date on or before today,
+tie-broken by **latest write**, and `/block-inputs` states plainly that it is
+writing a replacement rather than editing.
+
+That tie-break was a real bug and not a nicety: previously the winner was
+whichever `blockId` sorted last — a UUID, so effectively random — and a
+correction therefore took effect roughly half the time.
+
+**Consequences.** Every version of every block stays queryable. The UI shows how
+many blocks exist, so "you have five and this is the live one" is visible rather
+than inferred. There is no destructive action to confirm, because there is none.
+
+> **Lens.** When an architecture forbids an operation, the UI must NAME the
+> substitute. An absent button reads as an unfinished feature; a stated
+> substitute reads as a decision.
+
+## ADR-0030 — Log one exercise at a time
+
+**Status:** Accepted — supersedes the whole-session form
+
+**Context.** The first logging page pre-filled a whole session and saved it in
+one action, on the reasoning that "I did what it said" is the common case and
+should be one confirmation.
+
+The Google Form this app replaces did something different, and reading it
+changed the design: it submitted **one exercise per response**. That looked like
+a limitation of forms. It is not.
+
+**Decision.** Each exercise is independently submittable and shows how many sets
+it already carries.
+
+Three things fall out of that, all of which the session-level form got wrong:
+
+1. **You log as you go**, so closing the tab loses nothing.
+2. **The count answers "where am I up to"** — the question you actually have
+   after supersetting away and back, which no prescription can answer.
+3. **A partial session is a real state**, so the overview can colour a session
+   in-progress rather than binary done/not-done.
+
+The form's other good idea is kept: a **comma-separated weight list**.
+`60,70,80` is three sets at those loads with the same reps, which is how a
+ramping set is actually written down.
+
+**Consequences.** Completion is derived by folding observations, never stored —
+a set already carries its own `blockId`, `week` and `day`, so no status field
+exists that could disagree with the log.
+
+> **Lens.** When replacing a tool, read what its constraints produced before
+> discarding them. A form's "limitation" had been quietly encoding the right
+> unit of work for four years.

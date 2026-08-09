@@ -48,6 +48,10 @@ things that differ are transport and backing store — there is deliberately no
 make fix ci      # format, lint, typecheck, unit tests, terraform validate
 make e2e         # Playwright against the local stack
 make tf-check    # terraform fmt-check + validate. No cloud, no state.
+
+make history                    # curate reference/*.xlsx into local Parquet
+make publish-history ENV=dev    # upload that archive to an environment
+make duckdb-layer               # build the linux-arm64 DuckDB Lambda layer
 ```
 
 `make ci` is free, offline and deterministic. Anything that spends money or
@@ -64,7 +68,7 @@ flowchart LR
     s3["📦 S3 — SPA assets"]:::data
     api["⚡ API Lambda<br/>Function URL, AWS_IAM"]:::compute
     ddb[("🗄️ DynamoDB<br/>13-month hot window")]:::data
-    parquet[("🧊 S3 Parquet<br/>+ Athena")]:::data
+    parquet[("🧊 S3 Parquet<br/>read by DuckDB")]:::data
     aged["📤 age-out<br/>monthly"]:::compute
 
     viewer --> auth
@@ -109,7 +113,7 @@ propagate) never blocks an API deploy (seconds):
 | Stack | Owns | Changes when |
 |---|---|---|
 | `identity` | IdP credentials, the session signing key | rarely |
-| `data` | DynamoDB tables, archive bucket, Glue database | rarely |
+| `data` | DynamoDB tables, archive bucket | rarely |
 | `api` | the request handler | often |
 | `edge` | certificate, CloudFront, the authenticator | rarely, slowly |
 | `archive` | the Parquet age-out job | rarely |

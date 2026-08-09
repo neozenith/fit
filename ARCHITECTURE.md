@@ -27,13 +27,12 @@ flowchart TB
         api["API Lambda<br/>Function URL, AWS_IAM<br/>arm64, 512MB"]:::compute
         ddb[("DynamoDB on-demand<br/>blocks · sets · measurements<br/>cardio · season")]:::data
         arch["archive Lambda<br/>python3.13, monthly"]:::compute
-        parquet[("S3 — Parquet<br/>year=/month= partitions")]:::data
-        glue["Glue catalogue<br/>+ Athena workgroup"]:::infra
+        parquet[("S3 — Parquet<br/>aged-out + imported history")]:::data
         ssm["SSM Parameter Store<br/>/fit/{env}/*"]:::infra
     end
 
     subgraph global["Global — one deployment"]
-        cur[("CUR 2.0 export<br/>+ Glue + Athena")]:::data
+        cur[("CUR 2.0 export<br/>Parquet, no catalogue")]:::data
     end
 
     idp["EntraID<br/>OIDC + PKCE"]:::gate
@@ -46,9 +45,9 @@ flowchart TB
     cf -- "/*" --> s3spa
     cf -- "/api/*<br/>SigV4 via OAC" --> api
     api --> ddb
-    api -- "cold reads" --> glue
+    api -- "DuckDB reads" --> parquet
     api -- "cost page" --> cur
-    ddb --> arch --> parquet --> glue
+    ddb --> arch --> parquet
     ssm -. "cold start" .-> auth
     ssm -. "cold start" .-> api
 
@@ -126,12 +125,11 @@ flowchart LR
     scan["Scan items<br/>older than the cut-off"]:::compute
     write["Write Parquet<br/>year=/month="]:::data
     verify{"Read it back.<br/>Row count matches?"}:::gate
-    reg["Register the<br/>Glue partition"]:::infra
     del["Delete from<br/>DynamoDB"]:::compute
     abort["Abort this table.<br/>Nothing deleted."]:::gate
 
     scan --> write --> verify
-    verify -- yes --> reg --> del
+    verify -- yes --> del
     verify -- no --> abort
 
     classDef compute fill:#5c4295,stroke:#c3b0fd,color:#fff,stroke-width:2px
@@ -160,7 +158,8 @@ Stacks publish to **SSM**, never `terraform_remote_state`:
 ```
 /fit/{env}/data/table/{logical}      /fit/{env}/api/function_url
 /fit/{env}/data/archive_bucket       /fit/{env}/edge/distribution_id
-/fit/{env}/auth/session_hmac_key     /fit/global/finops/glue_database
+/fit/{env}/auth/session_hmac_key     /fit/global/finops/bucket
+                                    /fit/global/finops/prefix
 ```
 
 A reader needs IAM on a parameter prefix, not the writer's state file and its
@@ -189,7 +188,7 @@ the dependency runs one way and the scope stays exactly one distribution.
 | Bad signature, issuer, audience or expiry | **403**, indistinguishable | No oracle for which check failed. |
 | Wrong tenant, or address not allow-listed | **403** with a sign-out link | Both checks; the tenant alone admits the whole directory. |
 | `/api/*` with no session | **401** JSON | The SPA can act on it; a 302 becomes an opaque CORS error. |
-| Athena query exceeds 30s | error, surfaced | Blocking a page load longer is worse than reporting it. |
+| Parquet prefix is empty | `available: false` with the reason | Decided by listing the prefix, not by reading an error string. |
 | FinOps stack not deployed | `available: false` with the reason | Zeros would look like a free account. |
 | Parquet verify fails | abort that table, delete nothing | Data loss is the one unrecoverable outcome. |
 | pyarrow layer missing | **cold-start crash** | Silently skipping the write would delete items with nothing in their place. |
@@ -223,7 +222,7 @@ only reproduces from certain continents.
 | Lambda (API + edge + archive) | $0 | Pay per invocation. |
 | DynamoDB on-demand | storage only | No provisioned floor. |
 | S3 (SPA, archive, CUR) | storage only | Glacier IR after 90 days for cold partitions. |
-| Athena | $0 | Pay per byte scanned, capped per workgroup. |
+| Analytical queries | $0 | DuckDB runs inside the API Lambda; there is no query service to bill (ADR-0025). |
 
 Every resource carries `Project`, `Environment`, `Stack` and `ManagedBy` tags
 via provider `default_tags`, and `Project`/`Environment` are activated as

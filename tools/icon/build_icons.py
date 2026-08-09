@@ -69,7 +69,7 @@ SVG_DIR = ART / "svg"
 PNG_DIR = ART / "png"
 
 CANVAS = 512
-SIZES = (512, 128, 32)
+SIZES = (1024, 512, 256, 180, 128, 64, 32, 16)
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 # Anchored on the OsakaNights theme (--accent is #5c4295 light / #c3b0fd dark), but the
@@ -599,10 +599,12 @@ BASE = dict(points=SERIES_5, casing_opacity=0.25, text="fit", tittle=True, accen
 # Type is settled: Fraunces at wght 400, SOFT 50, WONK at maximum.
 LOCKED_AXES = dict(weight=400.0, soft=50.0, wonk=1.0)
 
-# Open axis: how far the landscape recedes behind the wordmark. The scene carries the
-# whole mark's texture, so fading it is the lever for letting the type dominate without
-# shrinking or recolouring anything.
-SCENE_OPACITIES = (1.0, 0.85, 0.70, 0.55, 0.40, 0.25)
+# How far the landscape recedes behind the wordmark, settled at 70%. Measured over the
+# whole wordmark, 70% gives the light theme its best worst-case contrast (1.21:1 versus
+# 1.10:1 at 25%). On dark it costs the one place the series line crosses the letters,
+# where the faded line lands near sand's own luminance — a local collision on ~2.6% of
+# the ink, not a general wash.
+SCENE_OPACITY = 0.70
 
 VARIANT_ACCENT: dict[str, str] = {}
 VARIANTS: dict[str, Variant] = {}
@@ -620,20 +622,16 @@ def register(name: str, **kw: object) -> None:
     VARIANTS[name] = _cell(**merged)  # type: ignore[arg-type]
 
 
-for _op in SCENE_OPACITIES:
-    register(f"op{int(_op * 100)}", scene_opacity=_op, **LOCKED_AXES)
+SETTLED = dict(scene_opacity=SCENE_OPACITY, **LOCKED_AXES)
 
-# The mark with no wordmark at all. Geometry is still derived from the text — the record
-# still stands where the tittle would be — so this is the same drawing with the type
-# removed, not a different composition.
-register("plain", hide_text=True, **LOCKED_AXES)
-
-# The settled design, and a textless twin at the same scene opacity. The twin exists so
-# the wordmark's backdrop can be measured by differencing the two renders — at 25% the
-# surfaces behind the type are nothing like they were at full strength.
-SETTLED = dict(scene_opacity=0.25, **LOCKED_AXES)
-register("final", **SETTLED)
-register("final-plain", hide_text=True, **SETTLED)
+# The canonical pair. `fit-mark` is not a different composition — it is `fit-icon` with
+# the type removed, geometry still derived from the wordmark, so the record still stands
+# exactly where the tittle would be and the two are unmistakably the same mark.
+register("fit-icon", **SETTLED)
+# Full strength, deliberately: the fade is a device for pushing the landscape behind the
+# wordmark, so with no wordmark it has nothing to do and only costs the mark its
+# contrast. Same geometry, different opacity — that difference IS the point.
+register("fit-mark", hide_text=True, scene_opacity=1.0, **LOCKED_AXES)
 
 # ── Emitters ─────────────────────────────────────────────────────────────────
 

@@ -101,7 +101,9 @@ export const OverviewPage = () => {
       <section className="card">
         <div className="row">
           <div>
-            <div className="muted">Seed one-rep maxes — squat / bench / deadlift</div>
+            {/* One line, because the flex row squeezes this column and a
+                wrapped label reads as a rendering fault rather than as prose. */}
+            <div className="muted nowrap">Seed maxes · squat / bench / deadlift</div>
             <div className="stat-value mono">
               {block.oneRepMax.squat} / {block.oneRepMax.bench} / {block.oneRepMax.deadlift}
               {block.units}

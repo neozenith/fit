@@ -1173,3 +1173,7 @@ button:disabled {
   font-weight: 700;
   font-size: 0.9rem;
 }
+
+.nowrap {
+  white-space: nowrap;
+}

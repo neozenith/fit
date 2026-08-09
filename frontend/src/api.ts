@@ -129,28 +129,59 @@ export const api = {
       available: boolean;
       reason?: string;
       groupBy?: string;
-      from?: string;
-      to?: string;
+      range?: string;
+      grain?: string;
       rows: Array<{ period: string; key: string; cost: number }>;
     }>(`/api/finops?${new URLSearchParams(params)}`),
 
   // --- Imported history ------------------------------------------------------
-  // Both can answer `available: false` — the import is an operator action, so
-  // an environment can be entirely healthy and hold none.
+  // Every one of these can answer `available: false` — the import is an
+  // operator action, so an environment can be entirely healthy and hold none.
+  //
+  // Each takes the query parameters straight through from the URL, which is
+  // what makes a shared link reproduce a chart exactly: the page never holds
+  // filter state the address bar does not.
 
-  // ONE request for every panel. Seven independent requests fanned out to as
-  // many cold Lambda containers on a scale-to-zero platform, each paying
-  // DuckDB's start-up separately; bundled, exactly one does.
   history: () =>
     request<{ available: false; reason: string } | ({ available: true } & HistoryBundle)>(
       "/api/history",
     ),
 
-  historyVolume: (grain: "week" | "month", exercise?: string) =>
+  historySummary: () =>
+    request<{ available: false; reason: string } | ({ available: true } & HistorySummary)>(
+      "/api/history/summary",
+    ),
+
+  historyExercises: () =>
+    request<
+      { available: false; reason: string } | { available: true; exercises: HistoryExercise[] }
+    >("/api/history/exercises"),
+
+  historyVolume: (params: Record<string, string>) =>
     request<
       | { available: false; reason: string }
       | { available: true; grain: string; points: HistoryVolumePoint[] }
-    >(`/api/history/volume?${new URLSearchParams({ grain, ...(exercise ? { exercise } : {}) })}`),
+    >(`/api/history/volume?${new URLSearchParams(params)}`),
+
+  historyRepMaxes: () =>
+    request<{ available: false; reason: string } | { available: true; repMaxes: HistoryRepMax[] }>(
+      "/api/history/rep-maxes",
+    ),
+
+  historyBodyweight: (params: Record<string, string> = {}) =>
+    request<{ available: false; reason: string } | { available: true; points: HistoryBodyPoint[] }>(
+      `/api/history/bodyweight?${new URLSearchParams(params)}`,
+    ),
+
+  historyCardio: (params: Record<string, string> = {}) =>
+    request<{ available: false; reason: string } | { available: true; weeks: HistoryCardioWeek[] }>(
+      `/api/history/cardio?${new URLSearchParams(params)}`,
+    ),
+
+  historyStreaks: () =>
+    request<{ available: false; reason: string } | { available: true; streaks: HistoryStreak[] }>(
+      "/api/history/streaks",
+    ),
 };
 
 export interface HistorySummary {

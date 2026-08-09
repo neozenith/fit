@@ -35,6 +35,7 @@
       "name": "@fit/frontend",
       "version": "0.1.0",
       "dependencies": {
+        "plotly.js-basic-dist-min": "3.3.0",
         "react": "19.2.8",
         "react-dom": "19.2.8",
       },
@@ -378,6 +379,8 @@
     "playwright": ["playwright@1.57.0", "", { "dependencies": { "playwright-core": "1.57.0" }, "optionalDependencies": { "fsevents": "2.3.2" }, "bin": { "playwright": "cli.js" } }, "sha512-ilYQj1s8sr2ppEJ2YVadYBN0Mb3mdo9J0wQ+UuDhzYqURwSoW4n1Xs5vs7ORwgDGmyEh33tRMeS8KhdkMoLXQw=="],
 
     "playwright-core": ["playwright-core@1.57.0", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ=="],
+
+    "plotly.js-basic-dist-min": ["plotly.js-basic-dist-min@3.3.0", "", {}, "sha512-deaVFAiFR3eFhhxwjSHUJy29KDszUP2Ohk5KIg/9weUJWdEq9qVA8OsIPbSyLc3EzQcO/CQxQIHRKQfYqYpDeA=="],
 
     "postcss": ["postcss@8.5.26", "", { "dependencies": { "nanoid": "^3.3.17", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-u82N74LFzG8ca+dD8puPnplTXoGH4fTPpVGuIbt36G3qvNlkvfD0lEAZSxaly3KX8TS/L1A1gsCEmvKmBcVbkQ=="],
 

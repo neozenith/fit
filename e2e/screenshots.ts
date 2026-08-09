@@ -19,13 +19,19 @@ import { chromium } from "@playwright/test";
 import { BASE_URLS, type EnvName, mintSession } from "./auth.js";
 
 const PAGES = [
-  ["today", ""],
-  ["block", "#/block"],
-  ["log", "#/log"],
-  ["body", "#/measurements"],
-  ["progress", "#/progress"],
-  ["history", "#/history"],
-  ["cost", "#/finops"],
+  ["today", "/today"],
+  ["block", "/block"],
+  ["log", "/log"],
+  ["body", "/measurements"],
+  ["progress", "/progress"],
+  ["exercises", "/exercises"],
+  ["history", "/history"],
+  ["history-volume", "/history/volume"],
+  ["history-bodyweight", "/history/bodyweight"],
+  ["history-rep-maxes", "/history/rep-maxes"],
+  ["history-cardio", "/history/cardio"],
+  ["history-streaks", "/history/streaks"],
+  ["cost", "/finops"],
 ] as const;
 
 const main = async (): Promise<void> => {
@@ -74,8 +80,8 @@ const main = async (): Promise<void> => {
     const dir = join(values.out as string, env, scheme);
     await mkdir(dir, { recursive: true });
 
-    for (const [name, hash] of PAGES) {
-      await page.goto(`${baseURL}/${hash}`);
+    for (const [name, route] of PAGES) {
+      await page.goto(`${baseURL}${route}`);
       // Wait for the heading rather than a fixed delay: every page fetches on
       // mount, and a timer either flakes or wastes time depending on the day.
       await page.waitForSelector("main h1", { state: "visible" });

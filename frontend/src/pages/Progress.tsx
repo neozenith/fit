@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type PersonalBest } from "../api.js";
-import { Banner, formatDate, LineChart, Loading } from "../components.jsx";
+import { Banner, formatDate, Loading } from "../components.jsx";
+import { LineSeriesPlot } from "../plot.jsx";
 
 /**
  * Strength over time.
@@ -60,7 +61,7 @@ export const ProgressPage = () => {
           Estimated from every logged set, so the line moves weekly rather than once a block.
         </p>
         {chart.length > 0 ? (
-          <LineChart series={chart} yLabel="Estimated 1RM" height={260} />
+          <LineSeriesPlot series={chart} yLabel="Estimated 1RM" height={260} />
         ) : (
           <p className="muted">Log some sets and this chart fills in.</p>
         )}

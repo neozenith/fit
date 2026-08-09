@@ -1,0 +1,17 @@
+{
+  "prompt": "A flat vector app icon, filling a perfect square edge to edge with no border and no\nrounded corners.\n\nBACKGROUND: a solid, completely flat near-black field, hex #101010. Absolutely uniform \u2014\nno gradient, no texture, no vignette, no noise.\n\nMAIN MOTIF \u2014 mountain range that is also a line chart: across the lower two thirds of\nthe square, a range of five sharp, angular, abstract mountain peaks rendered as clean\ngeometric triangles with straight edges. The upper ridgeline of the range is emphasised\nas a single continuous bold polyline stroke, like the plotted series of a line chart,\nstepping generally upward from the low left to the tallest peak at the right of centre.\nAt every vertex of that ridgeline \u2014 each summit and each valley \u2014 sits a small solid\nfilled circle, exactly like the data-point markers of a chart. The circles are the same\nsize as each other and clearly visible.\n\nDEPTH: two overlapping layers of peaks. The rear range is a deeper, dimmer violet and\nsits higher and further back; the front range is the bright pale violet and overlaps it.\nFlat fills only, hard edges where they overlap, no shading, no gradients, no atmospheric\nhaze.\n\nRESERVED CLEAR BAND: a horizontal band across the vertical middle of the square, spanning\nthe full width and about one third of the square's height, is kept visually calm and\nuncluttered \u2014 a quiet zone. The peaks pass behind it as broad, plain, unmodulated fields\nof flat colour, with no ridgeline vertices, no data-point circles, no fine detail and no\nbusy overlaps falling inside that band. Everything intricate sits above it or below it.\nThis band is a smooth resting surface.\n\nWHOLLY WORDLESS: the image is purely graphic and contains no lettering of any kind \u2014 no\nwords, no captions, no numerals, no signature, no watermark, no monogram, no axis labels,\nno tagline, no typography anywhere.\n\nCOLOR PALETTE (strict, use nothing outside this list):\n            summit, which is the one warm focal accent in the whole icon\n\nCOMPOSITION: square 1:1. The mountain range spans the full width, its bases running off\nthe left and right edges. The tallest peak rises to about 70% of the square's height.\nGenerous clear space at the very top of the square. The whole mark is balanced,\nsymmetrical in weight, and instantly readable when shrunk to a thumbnail.\n\nSTYLE: flat two-dimensional vector illustration, Swiss poster geometry, crisp hard\nedges, solid unmodulated fills, thick confident strokes. Original and unbranded \u2014 an\nindependent design containing no company logo, badge, emblem or third-party mark of any\nkind. Not photorealistic, not painterly, not three-dimensional, no drop shadows, no\nglow, no gloss, no reflections, no outlines around the square itself.",
+  "model": "gemini-3-pro-image",
+  "backend": "gemini",
+  "timestamp": "20260809_161510",
+  "index": 0,
+  "dimensions": "1024x1024",
+  "aspect": "1:1",
+  "requested_size": null,
+  "estimated_cost_usd": 0.134,
+  "prompt_file": "art/strava-icon/prompt_dark.md",
+  "auth": {
+    "mode": "adc",
+    "project": "whimsyhollow",
+    "location": "global"
+  }
+}

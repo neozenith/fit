@@ -113,16 +113,35 @@ export const seasonPlanSchema = z.object({
     .max(60),
 });
 
+/**
+ * Relative windows, counted back from today.
+ *
+ * Relative rather than absolute because that is what a cost question actually
+ * is — "what did the last week cost", not "what did 2026-08-02 to 2026-08-09
+ * cost". It also keeps a shared URL meaningful next month instead of frozen on
+ * a week nobody is asking about any more.
+ */
+export const FINOPS_RANGE_DAYS: Record<string, number | null> = {
+  "1d": 1,
+  "3d": 3,
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+  all: null,
+};
+
 export const finopsQuerySchema = z.object({
-  /** Inclusive start month, `YYYY-MM`. */
-  from: z
-    .string()
-    .regex(/^\d{4}-\d{2}$/)
-    .optional(),
-  to: z
-    .string()
-    .regex(/^\d{4}-\d{2}$/)
-    .optional(),
+  range: z.enum(["1d", "3d", "7d", "30d", "90d", "all"]).default("30d"),
+
+  /**
+   * Bucket width. Omitted, it is derived from the range.
+   *
+   * A daily bucket over five years is 1800 points of noise; a monthly bucket
+   * over three days is one bar. Deriving it means the common case needs no
+   * second parameter, and naming it means a URL can still pin an unusual pair.
+   */
+  grain: z.enum(["day", "month"]).optional(),
+
   /**
    * Restrict to one environment, or omit for all three.
    *
@@ -134,6 +153,18 @@ export const finopsQuerySchema = z.object({
   groupBy: z.enum(["service", "environment", "stack"]).default("service"),
 });
 
+const historyWindowShape = {
+  /** Inclusive, `YYYY-MM-DD`. */
+  from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+};
+
 /**
  * Query for the imported-history volume series.
  *
@@ -143,7 +174,19 @@ export const finopsQuerySchema = z.object({
  * identifier. Constraining it here is what makes that interpolation safe.
  */
 export const historyVolumeQuerySchema = z.object({
-  grain: z.enum(["week", "month"]).default("week"),
+  grain: z.enum(["day", "week", "month"]).default("month"),
   /** Restrict to one movement; omit for every exercise. */
   exercise: z.string().min(1).max(120).optional(),
+  ...historyWindowShape,
 });
+
+/**
+ * The date window shared by every history subpage.
+ *
+ * ABSOLUTE dates, unlike the FinOps ranges, and the difference is the data. The
+ * archive ends in 2023; a relative "last 30 days" window over it is empty every
+ * time, so a preset has to be counted back from the last RECORDED day rather
+ * than from today. The API therefore takes explicit bounds and reports the
+ * dataset's own extent, and the UI turns that into presets.
+ */
+export const historyWindowSchema = z.object(historyWindowShape);

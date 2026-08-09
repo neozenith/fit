@@ -62,13 +62,13 @@ a {
 .topbar {
   display: flex;
   align-items: center;
-  gap: var(--s4);
+  gap: var(--s3);
   padding: var(--s3) var(--s5);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 20;
   flex-wrap: wrap;
 }
 
@@ -77,45 +77,127 @@ a {
   font-weight: 700;
   font-size: 1.1rem;
   letter-spacing: -0.01em;
-  margin-right: var(--s2);
-}
-
-.nav {
-  display: flex;
-  gap: var(--s1);
-  flex-wrap: wrap;
-  /* `min-width: 0` is load-bearing. A flex item defaults to `min-width: auto`,
-     which refuses to shrink below its content — so this nav stayed 400px wide
-     inside a 390px viewport and its OWN `flex-wrap` never got the chance to
-     engage. The result was 115px of horizontal page scroll on every phone. */
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.nav button {
-  font: inherit;
-  font-size: 0.9rem;
-  padding: var(--s2) var(--s3);
-  border-radius: var(--pill);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.nav button:hover {
   color: var(--fg);
-  border-color: var(--border);
+  text-decoration: none;
 }
 
-.nav button[aria-current="page"] {
+.who {
+  font-size: 0.85rem;
+}
+
+/* The two-column body. `minmax(0, 1fr)` on the content column rather than
+   `1fr`: the implicit `auto` minimum would let a wide table push the column
+   wider than the viewport, taking the sidebar off-screen with it. */
+.body {
+  display: grid;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  align-items: start;
+}
+
+.sidenav {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  padding: var(--s4) var(--s3);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-width: 0;
+}
+
+.sidenav__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidenav__heading {
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 var(--s2) var(--s3);
+}
+
+.sidenav a {
+  display: block;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  border: 1px solid transparent;
+}
+
+.sidenav a:hover {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.sidenav a[aria-current="page"] {
   background: var(--accent);
   color: var(--on-accent);
   border-color: var(--accent);
 }
 
+.nav-toggle {
+  display: none;
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+/* A segmented control rather than a single cycling button. Three states cannot
+   be conveyed by one toggle, and "Auto" has to be visibly SELECTABLE - it is
+   the default, and a user who has picked Light needs a way back to it. */
+.theme-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--pill);
+  overflow: hidden;
+}
+
+.theme-switch button {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: var(--s1) var(--s3);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.theme-switch button:hover {
+  color: var(--fg);
+}
+
+.theme-switch button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
 .spacer {
   margin-left: auto;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 main {
@@ -123,13 +205,87 @@ main {
   max-width: 76rem;
   width: 100%;
   margin: 0 auto;
+  min-width: 0;
 }
 
-footer {
+.footer {
   padding: var(--s4) var(--s5);
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+/* Below this width a 13rem column is a third of the screen. The sidebar becomes
+   a drawer the header button opens, and the content takes the full width. */
+@media (max-width: 52rem) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nav-toggle {
+    display: inline-flex;
+  }
+
+  .sidenav {
+    display: none;
+    position: static;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidenav--open {
+    display: flex;
+  }
+
+  .who {
+    display: none;
+  }
+}
+
+/* --- Charts ---------------------------------------------------------------- */
+
+/* Plotly sizes itself to its container, so the container needs a width and the
+   page needs to not scroll sideways because of it. */
+.plot {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Filter rows above a chart. Wraps rather than scrolls: a hidden filter is
+   worse than a taller toolbar, because the URL says it is applied. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  align-items: flex-end;
+  margin-bottom: var(--s4);
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--pill);
+  overflow: hidden;
+}
+
+.segmented button {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: var(--s1) var(--s3);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segmented button:hover {
+  color: var(--fg);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
 /* --- Surfaces -------------------------------------------------------------- */
@@ -416,4 +572,42 @@ button:disabled {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
+}
+
+/* --- Filter fields --------------------------------------------------------- */
+
+/* `.field__label` rather than reusing the form `label` styles: these label a
+   GROUP of buttons, not a single control, so half of them are a <span> with
+   `aria-labelledby` and would otherwise lose their styling entirely. */
+.field__label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--s1);
+}
+
+/* --- Lists ----------------------------------------------------------------- */
+
+.linklist {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+
+
+/* Plotly injects its own modebar; give it the theme's colours rather than its
+   default light-only palette, which is invisible on a dark surface. */
+.plot .modebar-btn path {
+  fill: var(--muted);
+}
+
+.plot .modebar-btn:hover path {
+  fill: var(--fg);
 }

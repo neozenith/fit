@@ -1,7 +1,8 @@
 import type { MeasurementRecord } from "@fit/program";
 import { useCallback, useEffect, useState } from "react";
 import { api, type WeeklyMedian } from "../api.js";
-import { Banner, formatDate, LineChart, Loading } from "../components.jsx";
+import { Banner, formatDate, Loading } from "../components.jsx";
+import { LineSeriesPlot } from "../plot.jsx";
 
 /**
  * Body metrics.
@@ -119,7 +120,7 @@ export const MeasurementsPage = () => {
           figure is to see through daily noise.
         </p>
         {series.length > 0 ? (
-          <LineChart series={series} yLabel="Weekly medians" />
+          <LineSeriesPlot series={series} yLabel="Weekly medians" />
         ) : (
           <p className="muted">Record a few measurements and a trend will appear here.</p>
         )}

@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import { FINOPS_BUCKET, FINOPS_PREFIX } from "./const.js";
-import { parquetGlob, queryParquet } from "./query.js";
-import type { finopsQuerySchema } from "./schemas.js";
+import { parquetGlob, queryParquet, toNumber } from "./query.js";
+import { FINOPS_RANGE_DAYS, type finopsQuerySchema } from "./schemas.js";
 
 /**
  * Cost reporting, read from the GLOBAL FinOps export.
@@ -41,10 +41,24 @@ const GROUP_COLUMN: Record<FinopsQuery["groupBy"], string> = {
   stack: "resource_tags['user_stack']",
 };
 
-const monthsAgo = (n: number): string => {
-  const d = new Date();
-  d.setUTCMonth(d.getUTCMonth() - n);
-  return d.toISOString().slice(0, 7);
+/**
+ * How a bucket is cut, and how it is labelled.
+ *
+ * Cut on `line_item_usage_start_date`, NOT on `bill_billing_period_start_date`.
+ * The billing period is a whole month, so a 1-day or 7-day window bucketed by it
+ * collapses into a single bar covering thirty days of spend. The usage date is
+ * when the cost was actually incurred, and it is the only column that can answer
+ * "what did yesterday cost".
+ */
+const GRAIN_SQL: Record<"day" | "month", { trunc: string; format: string }> = {
+  day: { trunc: "day", format: "%Y-%m-%d" },
+  month: { trunc: "month", format: "%Y-%m" },
+};
+
+/** Daily detail stays legible up to about a quarter; past that it is noise. */
+const defaultGrain = (range: FinopsQuery["range"]): "day" | "month" => {
+  const days = FINOPS_RANGE_DAYS[range];
+  return typeof days === "number" && days <= 90 ? "day" : "month";
 };
 
 interface CostRow {
@@ -65,13 +79,14 @@ export const queryFinops = async (input: FinopsQuery) => {
     };
   }
 
-  const from = input.from ?? monthsAgo(5);
-  const to = input.to ?? monthsAgo(0);
+  const grain = input.grain ?? defaultGrain(input.range);
+  const { trunc, format } = GRAIN_SQL[grain];
+  const days = FINOPS_RANGE_DAYS[input.range] ?? null;
 
-  // The grouping column is selected from a fixed map keyed by a zod enum, so it
-  // cannot be caller-controlled. Everything else is BOUND — the glob, the date
-  // range and the environment filter reach DuckDB as parameters rather than as
-  // string concatenation.
+  // The grouping column and the truncation unit come from fixed maps keyed by
+  // zod enums, so neither can be caller-controlled. Everything else is BOUND —
+  // the glob, the window and the environment filter reach DuckDB as parameters
+  // rather than as string concatenation.
   const column = GROUP_COLUMN[input.groupBy];
   const glob = parquetGlob(FINOPS_BUCKET, FINOPS_PREFIX);
 
@@ -79,17 +94,21 @@ export const queryFinops = async (input: FinopsQuery) => {
     glob,
     `
     SELECT
-      strftime(bill_billing_period_start_date, '%Y-%m') AS period,
-      ${column}                                         AS grouping_key,
-      ROUND(SUM(line_item_unblended_cost), 4)           AS cost
+      strftime(date_trunc('${trunc}', line_item_usage_start_date), '${format}') AS period,
+      ${column}                                                                 AS grouping_key,
+      ROUND(SUM(line_item_unblended_cost), 6)                                   AS cost
     FROM read_parquet(?, hive_partitioning = true, union_by_name = true)
-    WHERE strftime(bill_billing_period_start_date, '%Y-%m') BETWEEN ? AND ?
+    WHERE (? IS NULL OR line_item_usage_start_date >= current_date - CAST(? AS INTEGER))
       AND resource_tags['user_project'] = 'fit'
       AND (? IS NULL OR resource_tags['user_environment'] = ?)
     GROUP BY period, ${column}
+    -- Exact-zero rows are the majority of a CUR: every free-tier line and every
+    -- service touched once appears at $0.000000. Keeping them turns a legend of
+    -- six real services into forty, most of which can never be seen.
+    HAVING SUM(line_item_unblended_cost) <> 0
     ORDER BY period, cost DESC
     `,
-    [glob, from, to, input.environment ?? null, input.environment ?? null],
+    [glob, days, days, input.environment ?? null, input.environment ?? null],
   );
 
   if (rows === null) {
@@ -106,12 +125,12 @@ export const queryFinops = async (input: FinopsQuery) => {
   return {
     available: true,
     groupBy: input.groupBy,
-    from,
-    to,
+    range: input.range,
+    grain,
     rows: rows.map((r) => ({
       period: r.period,
       key: r.grouping_key || "(untagged)",
-      cost: Number(r.cost),
+      cost: toNumber(r.cost),
     })),
   };
 };

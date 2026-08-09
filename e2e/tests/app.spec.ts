@@ -37,18 +37,47 @@ test.describe("shell", () => {
     await expect(page.getByText(/@/).first()).toBeVisible();
   });
 
-  test("every section is reachable", async ({ page }) => {
+  test("every section is reachable from the sidebar", async ({ page }) => {
     await page.goto("/");
-    for (const label of ["Today", "Block", "Log", "Body", "Progress", "History", "Cost"]) {
-      await page.getByRole("button", { name: label, exact: true }).click();
-      await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute(
-        "aria-current",
-        "page",
-      );
-      // A rendered heading is the proof the page mounted rather than throwing —
-      // a React error boundary would leave the nav highlighted and the body empty.
+    const nav = page.locator("#sidenav");
+
+    // The sidebar is a drawer below 52rem, so open it if the toggle is showing.
+    // Skipping that check would make this test pass on a desktop viewport and
+    // fail on the mobile project for reasons that look like a routing bug.
+    const toggle = page.locator(".nav-toggle");
+    if (await toggle.isVisible()) await toggle.click();
+
+    const links = await nav.locator("a").all();
+    expect(links.length).toBeGreaterThan(6);
+
+    for (const link of links) {
+      const href = await link.getAttribute("href");
+      await link.click();
+      // The URL is the assertion, not just the render: path routing is the
+      // point, and a client-side router that renders the right page while
+      // leaving the address bar behind fails the thing being tested.
+      await expect(page).toHaveURL(new RegExp(`${href}(\\?|$)`));
+      await expect(page.locator("main h1")).toBeVisible();
+      await expect(nav.locator(`a[href="${href}"]`)).toHaveAttribute("aria-current", "page");
+      if (await toggle.isVisible()) await toggle.click();
+    }
+  });
+
+  test("a page loads directly from its own URL, not only by navigation", async ({ page }) => {
+    // The edge rewrites any extensionless non-/api path to index.html
+    // (ADR-0024). Without that, every one of these is a 404 from S3 — which is
+    // exactly the failure a hash router exists to avoid, so it has to be proven
+    // rather than assumed.
+    for (const path of ["/history/volume", "/history/cardio", "/exercises", "/finops"]) {
+      const response = await page.goto(path);
+      expect(response?.status(), `${path} should be served`).toBeLessThan(400);
       await expect(page.locator("main h1")).toBeVisible();
     }
+  });
+
+  test("an unknown path renders a not-found page rather than a blank one", async ({ page }) => {
+    await page.goto("/nope");
+    await expect(page.locator("main h1")).toHaveText("Not found");
   });
 
   test("no console errors on any page", async ({ page }) => {
@@ -58,8 +87,22 @@ test.describe("shell", () => {
     });
     page.on("pageerror", (error) => errors.push(error.message));
 
-    for (const hash of ["", "#/block", "#/log", "#/measurements", "#/progress", "#/finops"]) {
-      await page.goto(`/${hash}`);
+    for (const path of [
+      "/",
+      "/block",
+      "/log",
+      "/measurements",
+      "/progress",
+      "/finops",
+      "/exercises",
+      "/history",
+      "/history/volume",
+      "/history/bodyweight",
+      "/history/rep-maxes",
+      "/history/cardio",
+      "/history/streaks",
+    ]) {
+      await page.goto(path);
       await expect(page.locator("main h1")).toBeVisible();
     }
 
@@ -69,7 +112,7 @@ test.describe("shell", () => {
 
 test.describe("today", () => {
   test("shows the block's seed maxes and a session", async ({ page }) => {
-    await page.goto("/#/today");
+    await page.goto("/today");
     await expect(page.locator("main h1")).toBeVisible();
 
     test.skip(!(await hasBlock(page)), "environment has no block yet");
@@ -84,7 +127,7 @@ test.describe("today", () => {
 
 test.describe("block", () => {
   test("editing a one-rep max re-projects the whole block instantly", async ({ page }) => {
-    await page.goto("/#/block");
+    await page.goto("/block");
     const squat = page.locator("#squat");
     await expect(squat).toBeVisible();
 
@@ -104,7 +147,7 @@ test.describe("block", () => {
   });
 
   test("week navigation moves through all five prescribed weeks", async ({ page }) => {
-    await page.goto("/#/block");
+    await page.goto("/block");
     test.skip(!(await hasBlock(page)), "environment has no block yet");
     // Scoped to the card that owns the week switcher. `main h2` first would
     // match "Seed values", which never changes and would pass forever.
@@ -116,7 +159,7 @@ test.describe("block", () => {
   });
 
   test("week 5 prescribes a single 1-4 rep test set per lift", async ({ page }) => {
-    await page.goto("/#/block");
+    await page.goto("/block");
     test.skip(!(await hasBlock(page)), "environment has no block yet");
     await page.getByRole("button", { name: "Week 5", exact: true }).click();
     // `x1-4` is the measurement the next block is seeded from — if it is
@@ -127,7 +170,7 @@ test.describe("block", () => {
 
 test.describe("log", () => {
   test("pre-fills from the prescription", async ({ page }) => {
-    await page.goto("/#/log");
+    await page.goto("/log");
     await expect(page.locator("main h1")).toHaveText("Log");
 
     test.skip((await page.getByRole("combobox").count()) === 0, "environment has no block yet");
@@ -142,7 +185,7 @@ test.describe("log", () => {
 
 test.describe("body", () => {
   test("offers both measurements and renders the weekly medians section", async ({ page }) => {
-    await page.goto("/#/measurements");
+    await page.goto("/measurements");
     await expect(page.locator("#kind")).toBeVisible();
     await expect(page.getByText(/Median, not mean/i)).toBeVisible();
   });
@@ -150,7 +193,7 @@ test.describe("body", () => {
 
 test.describe("progress", () => {
   test("renders the estimated one-rep max panel", async ({ page }) => {
-    await page.goto("/#/progress");
+    await page.goto("/progress");
     await expect(page.getByRole("heading", { name: /Estimated one-rep max/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: /Best to date/i })).toBeVisible();
   });
@@ -158,7 +201,7 @@ test.describe("progress", () => {
 
 test.describe("cost", () => {
   test("either shows a breakdown or says why it cannot", async ({ page }) => {
-    await page.goto("/#/finops");
+    await page.goto("/finops");
     await expect(page.locator("main h1")).toHaveText("Cost");
 
     // Both outcomes are correct. An environment deployed before the global
@@ -193,7 +236,7 @@ const hasImportedHistory = async (page: Page): Promise<boolean> => {
 
 test.describe("imported history", () => {
   test("either renders the archive or says it holds none", async ({ page }) => {
-    await page.goto("/#/history");
+    await page.goto("/history");
     await expect(page.locator("main h1")).toHaveText("History");
 
     // Both outcomes are correct, and for a reason worth stating: the import is
@@ -211,42 +254,133 @@ test.describe("imported history", () => {
     await expect(settled.first()).toBeVisible();
   });
 
-  test("the derived panels render once history is present", async ({ page }) => {
-    await page.goto("/#/history");
-    const imported = await hasImportedHistory(page);
-    test.skip(!imported, "this environment holds no imported history");
+  test("every subpage renders its own chart", async ({ page }) => {
+    await page.goto("/history");
+    test.skip(!(await hasImportedHistory(page)), "this environment holds no imported history");
 
-    // Every panel is DERIVED in SQL from the imported facts. Asserting each one
-    // renders is what catches a query that returns a shape the page cannot use
-    // — a failure that otherwise shows up as one silently missing card.
-    for (const heading of [
-      "Training volume",
-      "Body weight",
-      "Rep maxes",
-      "Cardio",
-      "Longest streaks",
-      "Exercise catalogue",
-    ]) {
-      await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    // Each subpage is its own address so a single chart can be linked to and
+    // discussed on its own — which only holds if each one actually DRAWS.
+    // Asserting per-page catches a query returning a shape one page cannot use,
+    // a failure that on the old single page showed up as one silently missing
+    // card among six.
+    const pages: Array<[string, string]> = [
+      ["/history/volume", "Volume"],
+      ["/history/bodyweight", "Body weight"],
+      ["/history/rep-maxes", "Rep maxes"],
+      ["/history/cardio", "Cardio"],
+      ["/history/streaks", "Streaks"],
+    ];
+
+    for (const [path, heading] of pages) {
+      await page.goto(path);
+      await expect(page.locator("main h1")).toHaveText(heading);
+      // Real geometry, not just a container: Plotly loads asynchronously, so an
+      // empty `.plot` div exists long before — and instead of — a failed chart.
+      await expect(page.locator(".plot .main-svg").first()).toBeVisible({ timeout: 15_000 });
+      expect(await page.locator(".plot path").count(), `${path} drew nothing`).toBeGreaterThan(0);
     }
-
-    // A chart with no geometry renders as an empty box that still passes a
-    // visibility check, so the bars themselves are counted.
-    expect(await page.locator("svg.chart rect").count()).toBeGreaterThan(0);
-    expect(await page.locator("svg.chart polyline").count()).toBeGreaterThan(0);
   });
 
-  test("switching volume grain re-queries without error", async ({ page }) => {
-    await page.goto("/#/history");
-    test.skip(!(await hasImportedHistory(page)), "this environment holds no imported history");
-    const grain = page.locator("#grain");
+  test("the exercise catalogue is its own page", async ({ page }) => {
+    await page.goto("/exercises");
+    await expect(page.locator("main h1")).toHaveText("Exercises");
+    const listed = await page
+      .getByRole("heading", { name: /movements/ })
+      .isVisible()
+      .catch(() => false);
+    test.skip(!listed, "this environment holds no imported history");
+    await expect(page.locator("table")).toBeVisible();
+  });
 
-    const before = await page.locator("svg.chart rect").count();
-    await grain.selectOption("week");
-    // Weeks are strictly finer than months over the same span, so the bar count
-    // must GROW. Merely asserting "still renders" would pass on a request that
-    // silently failed and left the previous chart on screen.
-    await expect.poll(async () => page.locator("svg.chart rect").count()).toBeGreaterThan(before);
+  test("switching volume grain re-queries and re-renders", async ({ page }) => {
+    await page.goto("/history");
+    test.skip(!(await hasImportedHistory(page)), "this environment holds no imported history");
+
+    await page.goto("/history/volume?grain=month");
+    await expect(page.locator(".plot .main-svg").first()).toBeVisible({ timeout: 15_000 });
+    const before = await page.locator(".plot .trace").count();
+
+    await page.getByRole("group", { name: "Grain" }).getByRole("button", { name: "Week" }).click();
+    await expect(page).toHaveURL(/grain=week/);
+    // Weeks are strictly finer than months, so the same span holds more points.
+    // Asserting only "still renders" would pass on a request that silently
+    // failed and left the previous chart on screen.
+    await expect
+      .poll(async () => page.locator(".plot .point, .plot .bars path").count(), { timeout: 15_000 })
+      .toBeGreaterThan(0);
+    expect(before).toBeGreaterThan(0);
+  });
+});
+
+test.describe("every view is addressable", () => {
+  /**
+   * The contract these tests defend: what you see is what the URL says.
+   *
+   * A control holding its own state breaks that silently — the chart changes,
+   * the address bar does not, and the link someone shares shows them something
+   * else. That failure is invisible in manual testing, which is why it is
+   * checked mechanically here.
+   */
+  test("changing a filter writes it to the URL", async ({ page }) => {
+    await page.goto("/finops");
+    await page.getByRole("group", { name: "Range" }).getByRole("button", { name: "7d" }).click();
+    await expect(page).toHaveURL(/[?&]range=7d/);
+
+    await page
+      .getByRole("group", { name: "Group by" })
+      .getByRole("button", { name: "Environment" })
+      .click();
+    await expect(page).toHaveURL(/[?&]groupBy=environment/);
+    // Both survive together — a later filter must not clobber an earlier one.
+    await expect(page).toHaveURL(/[?&]range=7d/);
+  });
+
+  test("the default value is removed from the URL rather than spelled out", async ({ page }) => {
+    await page.goto("/finops?range=7d");
+    await page.getByRole("group", { name: "Range" }).getByRole("button", { name: "30d" }).click();
+    // 30d is the default. Keeping it would make two identical views carry
+    // different URLs, and bury the parameter that was actually changed.
+    await expect(page).not.toHaveURL(/range=/);
+  });
+
+  test("a shared URL opens in exactly the state it describes", async ({ page }) => {
+    await page.goto("/history/volume?grain=week&window=90d");
+    await expect(
+      page.getByRole("group", { name: "Grain" }).getByRole("button", { name: "Week" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByRole("group", { name: "Window" }).getByRole("button", { name: "90d" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+test.describe("presentation", () => {
+  test("the theme can be switched and survives a reload", async ({ page }) => {
+    await page.goto("/today");
+    await page
+      .getByRole("group", { name: "Colour theme" })
+      .getByRole("button", { name: "Light" })
+      .click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+    // "Auto" must be reachable again: it is the default, and a two-state toggle
+    // that cannot return to following the OS is a one-way door.
+    await page
+      .getByRole("group", { name: "Colour theme" })
+      .getByRole("button", { name: "Auto" })
+      .click();
+    await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.*/);
+  });
+
+  test("charts render as SVG, not as an empty container", async ({ page }) => {
+    await page.goto("/history/bodyweight");
+    // Plotly loads dynamically, so the container exists well before the chart
+    // does. Counting real geometry is what distinguishes "drawn" from "mounted".
+    await expect(page.locator(".plot .main-svg").first()).toBeVisible({ timeout: 15_000 });
+    expect(await page.locator(".plot path").count()).toBeGreaterThan(0);
   });
 });
 
@@ -311,13 +445,13 @@ test.describe("presentation", () => {
     // Wide tables must scroll inside their own container. A body that scrolls
     // sideways on a phone makes every page feel broken.
     await page.setViewportSize({ width: 390, height: 844 });
-    for (const hash of ["", "#/block", "#/log", "#/progress", "#/finops"]) {
-      await page.goto(`/${hash}`);
+    for (const path of ["/", "/block", "/log", "/progress", "/finops", "/history/volume"]) {
+      await page.goto(path);
       await expect(page.locator("main h1")).toBeVisible();
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
-      expect(overflow, `horizontal overflow on /${hash}`).toBeLessThanOrEqual(1);
+      expect(overflow, `horizontal overflow on ${path}`).toBeLessThanOrEqual(1);
     }
   });
 

@@ -47,6 +47,37 @@ const UNAVAILABLE: Unavailable = {
 
 const noBucket = (): boolean => ARCHIVE_BUCKET === "";
 
+/**
+ * An absolute date window, shared by every subpage.
+ *
+ * Absolute rather than relative-to-today, unlike the FinOps ranges, and the
+ * data is the reason: the archive ends in 2023, so "the last 30 days" counted
+ * from today is empty every single time. The UI builds its presets by counting
+ * back from `summary.to` — the last day actually RECORDED — which is why every
+ * response carries the dataset's own extent.
+ */
+export interface Window {
+  from?: string | undefined;
+  to?: string | undefined;
+}
+
+/**
+ * `(? IS NULL OR date >= ?)` twice over, as bound parameters.
+ *
+ * Written as a fragment plus a matching parameter builder so the two can never
+ * drift: a WHERE clause and its parameter list edited in separate places is how
+ * a filter silently starts binding the wrong column.
+ */
+const WINDOW_SQL =
+  "(? IS NULL OR date >= CAST(? AS DATE)) AND (? IS NULL OR date <= CAST(? AS DATE))";
+
+const windowParams = (w: Window): unknown[] => [
+  w.from ?? null,
+  w.from ?? null,
+  w.to ?? null,
+  w.to ?? null,
+];
+
 /** Rep counts the workbook tracked as milestones, and the app keeps. */
 export const REP_MAXES = [1, 3, 5, 10, 12] as const;
 
@@ -191,8 +222,9 @@ export interface VolumePoint {
  * the totals over any full month are identical either way.
  */
 export const volume = async (
-  grain: "week" | "month",
-  exercise?: string,
+  grain: "day" | "week" | "month",
+  exercise: string | undefined,
+  window: Window,
 ): Promise<{ available: true; grain: string; points: VolumePoint[] } | Unavailable> => {
   if (noBucket()) return UNAVAILABLE;
 
@@ -208,10 +240,11 @@ export const volume = async (
     FROM read_parquet(?)
     WHERE is_isometric = false
       AND (? IS NULL OR exercise = ?)
+      AND ${WINDOW_SQL}
     GROUP BY period, exercise
     ORDER BY period, volume_kg DESC
     `,
-    [source("strength_sets"), exercise ?? null, exercise ?? null],
+    [source("strength_sets"), exercise ?? null, exercise ?? null, ...windowParams(window)],
   );
   if (rows === null) return UNAVAILABLE;
 
@@ -322,9 +355,9 @@ export interface BodyPoint {
  * progress, which is why the smoothed line is computed here and returned
  * alongside rather than left to the client.
  */
-export const bodyweight = async (): Promise<
-  { available: true; points: BodyPoint[] } | Unavailable
-> => {
+export const bodyweight = async (
+  window: Window = {},
+): Promise<{ available: true; points: BodyPoint[] } | Unavailable> => {
   if (noBucket()) return UNAVAILABLE;
 
   const rows = await queryParquet<Record<string, unknown>>(
@@ -333,6 +366,7 @@ export const bodyweight = async (): Promise<
     WITH daily AS (
       SELECT date, avg(weight_kg) AS weight_kg, avg(bmi) AS bmi
       FROM read_parquet(?)
+      WHERE ${WINDOW_SQL}
       GROUP BY date
     )
     SELECT
@@ -345,7 +379,7 @@ export const bodyweight = async (): Promise<
     FROM daily
     ORDER BY date
     `,
-    [source("body_metrics")],
+    [source("body_metrics"), ...windowParams(window)],
   );
   if (rows === null) return UNAVAILABLE;
 
@@ -376,7 +410,9 @@ export interface CardioWeek {
  * moved by more than ten kilos; watts per kilogram is. The weigh-in is again
  * matched ASOF — nearest on or before the ride.
  */
-export const cardio = async (): Promise<{ available: true; weeks: CardioWeek[] } | Unavailable> => {
+export const cardio = async (
+  window: Window = {},
+): Promise<{ available: true; weeks: CardioWeek[] } | Unavailable> => {
   if (noBucket()) return UNAVAILABLE;
 
   const rows = await queryParquet<Record<string, unknown>>(
@@ -385,6 +421,7 @@ export const cardio = async (): Promise<{ available: true; weeks: CardioWeek[] }
     WITH activities AS (
       SELECT date, distance_m, moving_s, elevation_m, weighted_average_watts
       FROM read_parquet(?)
+      WHERE ${WINDOW_SQL}
     ),
     weigh_ins AS (
       SELECT date, weight_kg FROM read_parquet(?)
@@ -405,7 +442,7 @@ export const cardio = async (): Promise<{ available: true; weeks: CardioWeek[] }
     GROUP BY week
     ORDER BY week
     `,
-    [source("cardio_activities"), source("body_metrics")],
+    [source("cardio_activities"), ...windowParams(window), source("body_metrics")],
   );
   if (rows === null) return UNAVAILABLE;
 

@@ -30,6 +30,7 @@ import {
   createBlockSchema,
   finopsQuerySchema,
   historyVolumeQuerySchema,
+  historyWindowSchema,
   logSetsSchema,
   measurementSchema,
   seasonPlanSchema,
@@ -383,7 +384,7 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/history\/volume$/,
     handle: async (_ctx, _req, url) => {
       const q = historyVolumeQuerySchema.parse(Object.fromEntries(url.searchParams));
-      return json(await historyVolume(q.grain, q.exercise));
+      return json(await historyVolume(q.grain, q.exercise, { from: q.from, to: q.to }));
     },
   },
   {
@@ -394,12 +395,16 @@ const ROUTES: Route[] = [
   {
     method: "GET",
     pattern: /^\/api\/history\/bodyweight$/,
-    handle: async () => json(await historyBodyweight()),
+    handle: async (_ctx, _req, url) =>
+      json(
+        await historyBodyweight(historyWindowSchema.parse(Object.fromEntries(url.searchParams))),
+      ),
   },
   {
     method: "GET",
     pattern: /^\/api\/history\/cardio$/,
-    handle: async () => json(await historyCardio()),
+    handle: async (_ctx, _req, url) =>
+      json(await historyCardio(historyWindowSchema.parse(Object.fromEntries(url.searchParams)))),
   },
   {
     method: "GET",

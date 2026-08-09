@@ -1008,3 +1008,70 @@ exists that could disagree with the log.
 > **Lens.** When replacing a tool, read what its constraints produced before
 > discarding them. A form's "limitation" had been quietly encoding the right
 > unit of work for four years.
+
+## ADR-0031 — Log one SET at a time, not one exercise
+
+**Status:** Accepted — supersedes ADR-0030's grain
+
+**Context.** ADR-0030 moved logging from whole-session to whole-exercise, on
+the evidence that the Google Form submitted one exercise per response. That was
+the right direction and still the wrong grain.
+
+An exercise is not one decision. A prescription of `x12, x12, x10, x8` is four
+sets performed minutes apart, and between them you rack the bar, rest, and quite
+often lose track. The question in the gym is never "have I done Military Press",
+it is **"which set am I on"** — and an exercise-level control cannot express it.
+
+The Edit button was the second mistake. It charged a click to editing the
+numbers, treating that as the exception. It is not: the reps you actually get
+are rarely the reps written down.
+
+**Decision.** One row per prescribed set, always editable, with a single tick
+that saves that set.
+
+- **The unticked row IS the progress indicator.** No separate status to read.
+- **Nothing is hidden.** Weight and reps are inputs on every row, pre-filled
+  from the prescription where the program gives a definite number.
+- **Rep counts are never forced.** A range or a max-reps set starts blank —
+  pre-filling one invites confirming a lift nobody performed.
+- **An extra row always exists** beyond the prescription. A fifth set when four
+  were written is training, not a data-entry error.
+
+The API returns the SETS, not a tally, because "was set three the heavy one" is
+the question in front of you when you pick the bar back up.
+
+**Consequences.** The common case is one tap per set with no typing. Completion
+means every prescribed set, so a session goes green only when it is actually
+finished — the overview gained a meaningful "in progress" as a side effect.
+
+> **Lens.** Match the unit of interaction to the unit of DECISION, not to the
+> unit of data. The two coincided for measurements and diverged for training,
+> and the gap cost two rewrites to see.
+
+## ADR-0032 — Free-text pickers need a browse affordance
+
+**Status:** Accepted
+
+**Context.** The accessory slots used `<input list>` with a `<datalist>`, chosen
+because the source spreadsheet allowed free text and a `<select>` would refuse
+every movement the catalogue had not seen.
+
+It was unusable, and the reason is worth recording: browsers only surface
+datalist suggestions **once you type**, render no indication that a list exists
+at all, and provide no way to browse. Picking an accessory whose name you half
+remember — the entire purpose of the control — was impossible.
+
+**Decision.** A combobox: an input that filters, a visible control that opens
+the whole list, keyboard navigation, and free text as a first-class outcome.
+
+Its options come from a **canonical list transcribed from the Google Form**,
+unioned with whatever the imported catalogue holds. The archive alone is not
+enough: it contains only what was actually performed, so every movement offered
+but never logged would silently vanish from the picker.
+
+**Consequences.** One more component to own, and it must stay accessible —
+`role="listbox"` on plain `div`s rather than on a `ul`, whose native semantics
+would fight the ARIA ones.
+
+> **Lens.** A control that permits anything still has to SHOW what is expected.
+> Accepting free text is a capability; discovering the options is the feature.

@@ -628,6 +628,13 @@ for _op in SCENE_OPACITIES:
 # removed, not a different composition.
 register("plain", hide_text=True, **LOCKED_AXES)
 
+# The settled design, and a textless twin at the same scene opacity. The twin exists so
+# the wordmark's backdrop can be measured by differencing the two renders — at 25% the
+# surfaces behind the type are nothing like they were at full strength.
+SETTLED = dict(scene_opacity=0.25, **LOCKED_AXES)
+register("final", **SETTLED)
+register("final-plain", hide_text=True, **SETTLED)
+
 # ── Emitters ─────────────────────────────────────────────────────────────────
 
 HEADER = (

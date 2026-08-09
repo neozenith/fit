@@ -1387,11 +1387,18 @@ button:disabled {
 
 /* --- Block management -------------------------------------------------------- */
 
+/* `.row` is a flex container whose children grow, which turned two buttons
+   into two full-width banners that read as alerts rather than as controls.
+   Actions size to their content. */
 .block-actions {
   gap: var(--s3);
   align-items: center;
   margin-bottom: var(--s4);
   flex-wrap: wrap;
+}
+
+.block-actions > button {
+  flex: 0 0 auto;
 }
 
 /* A destructive action looks destructive, but only once confirmed — the first

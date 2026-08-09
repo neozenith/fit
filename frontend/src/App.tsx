@@ -3,6 +3,7 @@ import { ApiError, api, type Identity } from "./api.js";
 import { Banner } from "./components.jsx";
 import { BlockPage } from "./pages/Block.jsx";
 import { FinOpsPage } from "./pages/FinOps.jsx";
+import { HistoryPage } from "./pages/History.jsx";
 import { LogPage } from "./pages/Log.jsx";
 import { MeasurementsPage } from "./pages/Measurements.jsx";
 import { ProgressPage } from "./pages/Progress.jsx";
@@ -25,6 +26,7 @@ const PAGES = [
   { id: "log", label: "Log", render: () => <LogPage /> },
   { id: "measurements", label: "Body", render: () => <MeasurementsPage /> },
   { id: "progress", label: "Progress", render: () => <ProgressPage /> },
+  { id: "history", label: "History", render: () => <HistoryPage /> },
   { id: "finops", label: "Cost", render: () => <FinOpsPage /> },
 ] as const;
 

@@ -70,6 +70,17 @@ typecheck: ## Typecheck every TypeScript workspace
 test: ## Run unit tests
 	bun test packages
 
+.PHONY: history
+history: ## Curate reference/*.xlsx into Parquet under reference/history/
+	# Local only. The workbook holds personal body metrics, so `reference/` is
+	# gitignored and nothing here leaves the machine — publishing is the separate,
+	# explicit `publish-history` target.
+	uv run tools/curate_history.py
+
+.PHONY: publish-history
+publish-history: ## Upload reference/history/ to ENV's archive bucket
+	bun run tools/publish-history.ts --env $(ENV)
+
 .PHONY: duckdb-layer
 duckdb-layer: ## Build the linux-arm64 DuckDB Lambda layer into api/.layer
 	# A SIBLING of `ci`, never a dependency: it needs npm and network access to

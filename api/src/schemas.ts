@@ -133,3 +133,17 @@ export const finopsQuerySchema = z.object({
   environment: z.enum(["dev", "test", "prod"]).optional(),
   groupBy: z.enum(["service", "environment", "stack"]).default("service"),
 });
+
+/**
+ * Query for the imported-history volume series.
+ *
+ * `grain` is an enum rather than a string because it is interpolated into
+ * `date_trunc()` — the one place in the history queries where a value reaches
+ * SQL as text rather than as a bound parameter, since DuckDB will not bind an
+ * identifier. Constraining it here is what makes that interpolation safe.
+ */
+export const historyVolumeQuerySchema = z.object({
+  grain: z.enum(["week", "month"]).default("week"),
+  /** Restrict to one movement; omit for every exercise. */
+  exercise: z.string().min(1).max(120).optional(),
+});

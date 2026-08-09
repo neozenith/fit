@@ -57,6 +57,14 @@ ISOMETRIC = re.compile(r"\(time\)$", re.IGNORECASE)
 # of stepping in plate increments.
 BODYWEIGHT_LOADED = {"Pull up", "Push ups", "Push ups (feet elevated)"}
 
+# The form used ONE question for everything, so a weigh-in is recorded as an
+# "exercise" of 1 set x 1 rep at body weight — and those rows sit in the
+# strength sheet alongside real lifts. Left in, they are half the strength log:
+# 498 phantom sessions, 44 tonnes of phantom volume, and a 42nd "exercise"
+# called Body Weight sitting third in the volume ranking. They are already
+# curated properly into body_metrics, so here they are excluded.
+WEIGH_IN_EXERCISE = "Body Weight"
+
 # One arm or one leg at a time — the recorded volume is per side, so a like for
 # like comparison against a bilateral lift has to know.
 UNILATERAL = re.compile(r"\b(SA|Single Arm|Single Leg|each side)\b", re.IGNORECASE)
@@ -133,14 +141,18 @@ def _epoch_ms(value: Any) -> datetime | None:
     return datetime.fromtimestamp(ms / 1000.0)
 
 
-def curate_strength(workbook: Any) -> tuple[pl.DataFrame, int]:
+def curate_strength(workbook: Any) -> tuple[pl.DataFrame, int, int]:
     _, rows = _sheet_rows(workbook, "WorkoutDataClean")
     records = []
     skipped = 0
+    weigh_ins = 0
     for date, exercise, sets, reps, weight in ((r + (None,) * 5)[:5] for r in rows):
         when = _timestamp(date)
         name = str(exercise).strip() if exercise else ""
         n_sets, n_reps, kg = _num(sets), _num(reps), _num(weight)
+        if name == WEIGH_IN_EXERCISE:
+            weigh_ins += 1
+            continue
         if when is None or not name or n_sets is None or n_reps is None or kg is None:
             # The sheet is padded with formula rows that evaluate to
             # (blank, blank, 1, 1, 0) — 100 of them. They are filler, not
@@ -164,7 +176,7 @@ def curate_strength(workbook: Any) -> tuple[pl.DataFrame, int]:
                 "is_isometric": isometric,
             }
         )
-    return pl.DataFrame(records).sort("logged_at"), skipped
+    return pl.DataFrame(records).sort("logged_at"), skipped, weigh_ins
 
 
 def curate_body(workbook: Any) -> tuple[pl.DataFrame, float]:
@@ -292,7 +304,7 @@ def main() -> None:
 
     workbook = load_workbook(args.source, read_only=True, data_only=True)
 
-    strength, skipped = curate_strength(workbook)
+    strength, skipped, weigh_ins = curate_strength(workbook)
     body, height_m = curate_body(workbook)
     cardio = curate_cardio(workbook)
     exercises = curate_exercises(strength)
@@ -307,13 +319,21 @@ def main() -> None:
     for name, frame in tables.items():
         if frame.is_empty():
             raise SystemExit(f"error: {name} curated to zero rows — refusing to write an empty asset")
-        frame.write_parquet(args.out / f"{name}.parquet", compression="zstd")
+        # A DIRECTORY per table, mirroring exactly what publish-history.ts puts
+        # in S3. Identical layouts mean the same `history/{table}/**/*.parquet`
+        # glob works locally and deployed, so `make dev` exercises the real
+        # queries — and it leaves room to split the import by year later without
+        # touching a single query.
+        table_dir = args.out / name
+        table_dir.mkdir(parents=True, exist_ok=True)
+        frame.write_parquet(table_dir / f"{name}.parquet", compression="zstd")
 
     manifest = {
         "source": args.source.name,
         "curated_at": datetime.now().isoformat(timespec="seconds"),
         "height_m": height_m,
         "skipped_filler_rows": skipped,
+        "weigh_in_rows_routed_to_body_metrics": weigh_ins,
         "tables": {
             name: {
                 "rows": frame.height,
@@ -329,8 +349,13 @@ def main() -> None:
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     for name, frame in tables.items():
-        log.info("%-20s %6d rows -> %s", name, frame.height, args.out / f"{name}.parquet")
-    log.info("implied height %sm; %d filler rows skipped", height_m, skipped)
+        log.info("%-20s %6d rows -> %s", name, frame.height, args.out / name / f"{name}.parquet")
+    log.info(
+        "implied height %sm; %d filler rows skipped; %d weigh-in rows routed to body_metrics",
+        height_m,
+        skipped,
+        weigh_ins,
+    )
 
 
 if __name__ == "__main__":

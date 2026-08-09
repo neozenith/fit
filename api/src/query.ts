@@ -77,32 +77,47 @@ const instance = (): Promise<DuckDBInstanceType> => {
 };
 
 /**
- * Run a read-only query and return plain objects.
+ * Give a connection the ability to read `s3://`, and only when it needs it.
  *
- * The S3 secret reads the Lambda's credentials from the ENVIRONMENT rather than
- * from a config file. `credential_chain` with no chain specified defaults to
- * `config`, which fails outright where there is no `~/.aws/config` — and Lambda
- * is exactly that place. Creating the secret per call also means a container
- * that outlives a credential rotation picks up the new values.
+ * `CREATE SECRET ... PROVIDER credential_chain` VALIDATES EAGERLY: it resolves
+ * the chain at creation and raises if it comes up empty. So a query over local
+ * Parquet on a laptop with credentials in a profile rather than the environment
+ * would fail on a secret it was never going to use.
+ *
+ * Gating on the source is therefore correctness, not thrift — and it is not a
+ * degraded path either: reading a local file genuinely requires no S3
+ * credentials. When the source IS `s3://`, a missing chain still fails loudly.
+ *
+ * `CHAIN 'env'` because Lambda publishes its role credentials as environment
+ * variables and refreshes them there; the default chain is `config`, which
+ * looks for a `~/.aws/config` that Lambda does not have.
  */
+const configureS3 = async (connection: {
+  run: (sql: string) => Promise<unknown>;
+}): Promise<void> => {
+  await connection.run(`
+    LOAD httpfs;
+    LOAD aws;
+    CREATE OR REPLACE SECRET s3_role (
+      TYPE s3,
+      PROVIDER credential_chain,
+      CHAIN 'env',
+      REGION '${REGION}'
+    );
+  `);
+};
+
+/** Run a read-only query and return plain objects. */
 export const query = async <T = Record<string, unknown>>(
   sql: string,
   params: unknown[] = [],
+  options: { s3?: boolean } = {},
 ): Promise<T[]> => {
   const db = await instance();
   const connection = await db.connect();
 
   try {
-    await connection.run(`
-      LOAD httpfs;
-      LOAD aws;
-      CREATE OR REPLACE SECRET s3_role (
-        TYPE s3,
-        PROVIDER credential_chain,
-        CHAIN 'env;sts',
-        REGION '${REGION}'
-      );
-    `);
+    if (options.s3) await configureS3(connection);
 
     // Parameters are bound, never interpolated. Every caller here passes values
     // that have already been through a zod schema, but binding is the habit that
@@ -123,9 +138,21 @@ export const query = async <T = Record<string, unknown>>(
  *
  * `**` rather than a fixed depth, so a partition scheme can gain a level
  * without every query needing an edit.
+ *
+ * An ABSOLUTE PATH in place of a bucket name yields a filesystem glob instead
+ * of an `s3://` one. That is the same local-development swap as
+ * `DYNAMODB_ENDPOINT` (ADR-0016): transport and backing store differ locally,
+ * and nothing else does. It exists so `make dev` runs the real handlers over
+ * the real curated Parquet — every SQL statement in `history.ts` is exercised
+ * against actual data before it is ever deployed, which is not true of a
+ * query that only ever runs against S3.
  */
-export const parquetGlob = (bucket: string, prefix: string): string =>
-  `s3://${bucket}/${prefix.replace(/\/+$/, "")}/**/*.parquet`;
+export const parquetGlob = (bucket: string, prefix: string): string => {
+  const trimmed = prefix.replace(/\/+$/, "");
+  return bucket.startsWith("/")
+    ? `${bucket.replace(/\/+$/, "")}/${trimmed}/**/*.parquet`
+    : `s3://${bucket}/${trimmed}/**/*.parquet`;
+};
 
 /**
  * Run a query over a Parquet glob, returning no rows when the glob matches
@@ -144,9 +171,10 @@ export const queryParquet = async <T = Record<string, unknown>>(
   sql: string,
   params: unknown[] = [],
 ): Promise<T[] | null> => {
-  const listed = await query<{ n: bigint }>("SELECT count(*) AS n FROM glob(?)", [glob]);
+  const s3 = glob.startsWith("s3://");
+  const listed = await query<{ n: bigint }>("SELECT count(*) AS n FROM glob(?)", [glob], { s3 });
   if (toNumber(listed[0]?.n) === 0) return null;
-  return query<T>(sql, params);
+  return query<T>(sql, params, { s3 });
 };
 
 /** DuckDB returns BIGINT columns as `bigint`; every caller here wants a number. */

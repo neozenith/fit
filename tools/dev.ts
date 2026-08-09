@@ -69,6 +69,15 @@ spawn("api", ["bun", "run", "--hot", "api/src/server.ts"], {
   DYNAMODB_ENDPOINT: "http://localhost:8000",
   TABLE_PREFIX: "fit-local",
   AWS_REGION: "ap-southeast-2",
+  // An absolute path rather than a bucket name, which `parquetGlob` reads as a
+  // filesystem source. That makes the History page run its REAL DuckDB queries
+  // against the REAL curated Parquet locally — the alternative is a page whose
+  // SQL is first executed in a deployed environment.
+  //
+  // `reference/` is gitignored and may simply not exist; the history routes
+  // then answer `available: false`, which is the same thing a fresh
+  // environment answers, so the empty state is exercised too.
+  ARCHIVE_BUCKET: `${import.meta.dir}/../reference`,
 });
 
 spawn("spa", ["bun", "run", "--cwd", "frontend", "dev"], {

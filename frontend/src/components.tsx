@@ -234,3 +234,99 @@ export const LineChart = ({
     </>
   );
 };
+
+/**
+ * A categorical bar chart.
+ *
+ * Separate from `LineChart` rather than a mode of it, because the two answer
+ * different questions and the axes are not interchangeable: a line implies
+ * continuity between points, which is exactly wrong for "volume in March" —
+ * a month with no training is a missing bar, not a dip in a trend.
+ *
+ * Hand-drawn for the same reason as `LineChart`: a charting dependency would
+ * outweigh the entire rest of the bundle.
+ */
+export const BarChart = ({
+  bars,
+  height = 220,
+  colour = "var(--series-1)",
+  format = (v: number) => String(Math.round(v)),
+}: {
+  bars: Array<{ label: string; value: number }>;
+  height?: number;
+  colour?: string;
+  format?: (value: number) => string;
+}) => {
+  if (bars.length === 0) return <p className="muted">Nothing in this range.</p>;
+
+  const width = 720;
+  const pad = { top: 12, right: 12, bottom: 34, left: 56 };
+  const maxV = Math.max(...bars.map((b) => b.value)) || 1;
+
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const slot = plotW / bars.length;
+  // A one-pixel floor keeps a bar visible at all: a period with a little work
+  // rendering as literally nothing is indistinguishable from a period with none.
+  const barW = Math.max(1, slot * 0.72);
+
+  // At most eight labels, whatever the range. Five years of months is sixty
+  // ticks, which overlap into an unreadable smear.
+  const labelEvery = Math.max(1, Math.ceil(bars.length / 8));
+
+  return (
+    <>
+      <svg
+        className="chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={`${bars.length} periods, peak ${format(maxV)}`}
+        preserveAspectRatio="xMidYMid meet"
+      >
+        <title>{`Peak ${format(maxV)}`}</title>
+        {[0, maxV / 2, maxV].map((t) => {
+          const ty = pad.top + plotH - (t / maxV) * plotH;
+          return (
+            <g key={t}>
+              <line className="grid-line" x1={pad.left} x2={width - pad.right} y1={ty} y2={ty} />
+              <text className="axis-label" x={4} y={ty + 3}>
+                {format(t)}
+              </text>
+            </g>
+          );
+        })}
+        {bars.map((b, i) => {
+          const h = (b.value / maxV) * plotH;
+          return (
+            // Index, not label: two periods can share a label once a range is
+            // filtered, and React would silently drop the duplicate bar.
+            <rect
+              key={`${b.label}-${i}`}
+              x={pad.left + i * slot + (slot - barW) / 2}
+              y={pad.top + plotH - h}
+              width={barW}
+              height={Math.max(h, b.value > 0 ? 1 : 0)}
+              fill={colour}
+              rx={1}
+            >
+              <title>{`${b.label}: ${format(b.value)}`}</title>
+            </rect>
+          );
+        })}
+        {bars.map((b, i) =>
+          i % labelEvery === 0 ? (
+            <text
+              key={`label-${b.label}-${i}`}
+              className="axis-label"
+              x={pad.left + i * slot + slot / 2}
+              y={height - 10}
+              textAnchor="middle"
+            >
+              {b.label}
+            </text>
+          ) : null,
+        )}
+      </svg>
+    </>
+  );
+};

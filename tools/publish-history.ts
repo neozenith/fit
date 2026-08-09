@@ -53,7 +53,8 @@ const archiveBucket = async (environment: Environment): Promise<string> => {
   const name = `/fit/${environment}/data/archive_bucket`;
   const result = await ssm.send(new GetParameterCommand({ Name: name }));
   const value = result.Parameter?.Value;
-  if (!value) throw new Error(`${name} is empty — has the data stack been applied for ${environment}?`);
+  if (!value)
+    throw new Error(`${name} is empty — has the data stack been applied for ${environment}?`);
   return value;
 };
 
@@ -110,7 +111,9 @@ const main = async (): Promise<void> => {
     process.exit(2);
   }
 
-  const entries = (await readdir(SOURCE_DIR)).filter((f) => f.endsWith(".parquet")).sort();
+  const entries = (await readdir(SOURCE_DIR, { recursive: true }))
+    .filter((f) => f.endsWith(".parquet"))
+    .sort();
   if (entries.length === 0) {
     // Loud, and specific about the fix. An empty publish that exits 0 would
     // leave the environment reporting "no history" with nothing to explain it.
@@ -122,8 +125,10 @@ const main = async (): Promise<void> => {
 
   console.log(`${environment}: s3://${bucket}/${PREFIX}/`);
   for (const file of entries) {
-    const table = file.replace(/\.parquet$/, "");
-    const key = `${PREFIX}/${table}/${file}`;
+    // `file` already carries its table directory — the curated tree mirrors the
+    // S3 layout exactly, so the key is the relative path and nothing is rebuilt
+    // from a filename that could disagree with it.
+    const key = `${PREFIX}/${file}`;
     const body = await readFile(`${SOURCE_DIR}${file}`);
 
     if (await alreadyPublished(s3, bucket, key, body)) {

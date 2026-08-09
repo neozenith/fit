@@ -1,5 +1,25 @@
-import { DuckDBInstance } from "@duckdb/node-api";
+import { createRequire } from "node:module";
+import type { DuckDBInstance as DuckDBInstanceType } from "@duckdb/node-api";
 import { DUCKDB_EXTENSION_DIR, REGION } from "./const.js";
+
+/**
+ * Loaded through `createRequire`, not by a static `import`, and that is not a
+ * style choice.
+ *
+ * Lambda puts a layer's packages on `NODE_PATH`, and **`NODE_PATH` applies only
+ * to CommonJS `require`** — ESM bare-specifier resolution walks `node_modules`
+ * upward from the importing file, which for a handler at `/var/task` never
+ * reaches `/opt/nodejs/node_modules`. A plain `import` therefore resolves
+ * perfectly on a laptop, survives typecheck and bundling, and then fails at the
+ * first cold start with `ERR_MODULE_NOT_FOUND`.
+ *
+ * `@duckdb/node-api` is CommonJS (no `"type": "module"`), so requiring it is
+ * also what the package itself expects. The types come from the dev-time
+ * dependency; only the runtime lookup goes through the layer.
+ */
+const { DuckDBInstance } = createRequire(import.meta.url)(
+  "@duckdb/node-api",
+) as typeof import("@duckdb/node-api");
 
 /**
  * Analytical queries over Parquet in S3, run inside this Lambda (ADR-0025).
@@ -21,9 +41,9 @@ import { DUCKDB_EXTENSION_DIR, REGION } from "./const.js";
  * invocation. The PROMISE is cached rather than the instance, so two concurrent
  * first requests share one start-up instead of racing to create two.
  */
-let instancePromise: Promise<DuckDBInstance> | null = null;
+let instancePromise: Promise<DuckDBInstanceType> | null = null;
 
-const instance = (): Promise<DuckDBInstance> => {
+const instance = (): Promise<DuckDBInstanceType> => {
   instancePromise ??= DuckDBInstance.create(":memory:", {
     // Spread rather than a constant key: DuckDB rejects an empty
     // `extension_directory`, so "unset" has to mean absent, not "".

@@ -136,3 +136,18 @@ make github-environments       # once per repo
 make cold-start ENV=dev        # identity -> data -> api -> edge -> archive -> frontend
 make entra                     # AFTER identity exists; re-run seeds all three envs
 ```
+- **An Athena workgroup cannot be deleted while it holds query history.** The
+  removal in ADR-0025 planned cleanly and then failed at apply with
+  `InvalidRequestException: WorkGroup fit-finops is not empty` — 84 past query
+  executions count as contents. `force_destroy = true` would have covered it,
+  but by then the resource was already out of the configuration and Terraform
+  could only try the plain delete. The fix was an out-of-band
+  `aws athena delete-work-group --recursive-delete-option`, after which the
+  apply reconciled. **Put `force_destroy` on a resource BEFORE the commit that
+  removes it**, or accept a manual step.
+- **`aws_bcmdataexports_export` gains `BILLING_VIEW_ARN` on its own.** AWS
+  returns a table-configuration key the configuration never set, and the
+  provider rejects the mismatch with "Provider produced inconsistent result
+  after apply". It is declared explicitly, derived from the account id
+  (`arn:aws:billing::{account}:billingview/primary`), so planned and applied
+  agree.

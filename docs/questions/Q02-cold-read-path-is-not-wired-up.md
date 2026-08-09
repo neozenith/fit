@@ -1,61 +1,45 @@
-# Q02 — The Athena cold-read path exists but is not wired into training queries
+# Q02 — The cold-read path exists but is not wired into training queries
 
-**Status:** Open. Assumption taken, non-blocking.
+**Status:** CLOSED, 2026-08-09. Settled by
+[ADR-0026](../../ADRs.md) — option 2, an explicit archive surface.
+
 **Raised:** 2026-08-08, while building the API.
-**Lenses checked:** ADR-0012 (hot in DynamoDB, cold in Parquet), ADR-0001
-(derive rather than store). ADR-0012 states the *storage* rule and the age-out
-ordering, but says nothing about how a read spanning the boundary behaves. That
-is a genuinely open design question.
 
-## The question
+## What settled it
 
-ADR-0012 says the API "reads DynamoDB for the hot window and Athena for anything
-older, transparently". Today only half of that is true:
+The question ended on a test: *"whether 'show me my whole training history' is a
+page the athlete actually wants or a hypothetical."*
 
-- **Built:** the age-out job writes and registers Parquet partitions; the Glue
-  database and the app's Athena workgroup exist; the API has an Athena client
-  and uses it for the FinOps page.
-- **Not built:** `/api/sets`, `/api/measurements` and `/api/progress` read
-  DynamoDB *only*. A query reaching past the hot window silently returns fewer
-  results rather than falling through to Parquet.
+It was real. A second workbook arrived carrying five years of training that
+predate this app, and the answer became a concrete requirement rather than a
+design preference.
 
-"Silently" is the problem. The chart would simply start at the hot-window
-boundary and look like the athlete began training thirteen months ago.
+## The resolution
 
-## Why it is not blocking
+Option 2 — an **explicit archive surface** — as predicted, for the reason
+predicted: it keeps the archive off the interactive path.
 
-Nothing has aged out yet, and nothing can for thirteen months in `test` or
-`prod` (one month in `dev`). The gap is invisible until the first age-out runs,
-which gives a large and precisely-known window to close it.
+- `/api/history/*` serves the imported archive, read-only, queried with DuckDB
+  over Parquet in the environment's archive bucket (ADR-0025, ADR-0026).
+- `/api/sets`, `/api/measurements` and `/api/progress` still read DynamoDB only,
+  and now that is a *stated* boundary rather than a silent one.
 
-## Assumption taken
+Two premises of the original question have since changed and are recorded here
+so the reasoning is not re-run against a world that no longer exists:
 
-The API reads the hot window only, and that is **not** disguised: a response
-that may be truncated by the boundary should say so rather than looking
-complete. That framing is deliberate — an honest partial answer is recoverable,
-a silently truncated one is not.
+- **There is no Athena, and no round-trip ceiling.** ADR-0025 replaced it with
+  DuckDB inside the Lambda, so the "seconds, not milliseconds" cost that pushed
+  against option 1 is much smaller than it was. It is still not zero, and the
+  separation is still the right shape — but on latency alone the argument is
+  weaker now than when it was written.
+- **Option 3 (precomputed rollups) is dead, not deferred.** With no catalogue
+  and a full scan costing less than the bookkeeping to avoid it, precomputing
+  aggregates would only fix the shape of a chart before knowing what the chart
+  should show.
 
-## The design question behind it
+## What remains open
 
-Three plausible shapes, and they are meaningfully different:
-
-1. **Transparent union.** Every query hits DynamoDB, and hits Athena too when
-   the requested range crosses the cut-off. Simplest to consume, but it puts an
-   Athena round trip (seconds, not milliseconds) on a page load, and the
-   deduplication story matters because the age-out tolerates duplicates.
-2. **Explicit archive endpoint.** `/api/archive/sets` is separate, and the UI
-   asks for it only when a user requests history. Keeps every interactive page
-   fast; makes "show me everything" a deliberate act.
-3. **Precomputed rollups.** The age-out job writes monthly aggregates back into
-   DynamoDB as it archives. Charts stay instant forever, at the cost of deciding
-   the aggregate shape now — and a chart is exactly the thing whose shape
-   changes.
-
-Option 2 fits the existing grain best: it keeps the Athena timeout ceiling off
-the interactive path, and it matches how the FinOps page already works.
-
-## What would settle it
-
-Whether "show me my whole training history" is a page the athlete actually wants
-or a hypothetical. If it is real, option 2. If nobody ever scrolls past a year,
-the hot window alone is the whole answer and this closes as won't-do.
+Nothing blocking. The one genuine gap: the age-out job's own Parquet output
+(`tables/…`) is written but nothing reads it yet, because no environment has
+data old enough to have aged out. When one does, the pattern is already built —
+it is the same `read_parquet` glob the history routes use.

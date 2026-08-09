@@ -803,3 +803,61 @@ carry three traps rather than the one anticipated:
 > "Parquet on S3" suggests a warehouse; kilobytes suggest a library. A managed
 > service that bills a minimum per query is the wrong shape for data smaller
 > than that minimum, however well it fits the file format.
+
+## ADR-0026 — Imported history is a separate, read-only archive, not backfilled into DynamoDB
+
+**Status:** Accepted — settles [Q02](docs/questions/Q02-cold-read-path-is-not-wired-up.md)
+
+**Context.** Five years of training predate this app, in a Google Forms
+spreadsheet grown to 32 sheets. The obvious move is to backfill it into the
+`sets`, `measurements` and `cardio` tables so every existing page just works.
+
+Three things make that wrong.
+
+**The data does not fit the schema, and forcing it would lose information.** The
+form asked one question for everything, so a weigh-in is recorded as an
+"exercise" of 1×1 at body weight; a set is sometimes `"65,95,115"` in the weight
+column; a plank's "reps" are seconds. Coercing that into `SetRecord` means
+either inventing values or dropping rows.
+
+**It is history, and history is not editable.** Backfilled rows would sit in an
+append-only table (ADR-0013) indistinguishable from rows logged today, so a
+correction to the import would be indistinguishable from a correction to
+training. Keeping it separate makes "this is the old tracker" a fact of the
+storage, not a convention.
+
+**It is already cold.** Every row is older than the 13-month hot window
+(ADR-0012), so backfilling would write ~2000 items into DynamoDB for the age-out
+job to move straight back out to Parquet.
+
+**Decision.** Curate the workbook's **facts** — and only its facts — into
+Parquet, publish that to each environment's archive bucket under `history/`, and
+serve it through `/api/history/*`, read-only, queried with DuckDB (ADR-0025).
+
+This is option 2 from Q02, and Q02's own test decided it: "show me my whole
+training history" turned out to be a page the athlete actually wanted.
+
+**Only four of the workbook's 32 sheets are imported.** The other 28 are
+derived — pivots, dashboards, streak calendars, a ride forecaster. Importing one
+would bake a 2021 spreadsheet's arithmetic into the data layer where nothing can
+ever check it. Every number on the History page is recomputed in SQL from the
+facts, so a disagreement with the old workbook is a question with an answer.
+
+**Consequences.**
+
+- The interactive pages keep their DynamoDB-only latency; nothing gained a
+  cross-boundary union query.
+- Publishing is an explicit operator command (`make publish-history ENV=…`), not
+  a deploy step. The source holds body-composition data and `reference/` is
+  gitignored — nothing leaves the machine because a build ran.
+- An environment can legitimately hold no history, so every history route
+  answers `available: false` rather than an empty chart.
+- The exercise catalogue is derived from the log rather than transcribed from
+  the workbook's `Type` column, which evaluates to `#VALUE!` on a third of its
+  rows. A catalogue built from the log cannot contain a movement never performed
+  nor omit one that was.
+
+> **Lens.** Import the FACTS and recompute the derivations. A derived table
+> imported as data is an answer with no question attached: it cannot be
+> re-derived, cannot be checked, and silently carries whatever assumptions its
+> author had at the time.

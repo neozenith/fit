@@ -132,6 +132,17 @@ resource "aws_bcmdataexports_export" "cur" {
           INCLUDE_MANUAL_DISCOUNT_COMPATIBILITY = "FALSE"
           INCLUDE_SPLIT_COST_ALLOCATION_DATA    = "FALSE"
           TIME_GRANULARITY                      = "DAILY"
+
+          # Declared even though it is a default, because AWS SETS IT ANYWAY.
+          # Omitted, the apply fails with "Provider produced inconsistent result
+          # after apply: new element BILLING_VIEW_ARN has appeared" — the
+          # service returns a key the configuration never asked for, and the
+          # provider refuses to reconcile it. Stating it makes the applied value
+          # match the planned one.
+          #
+          # `primary` is the account's default billing view and its ARN is
+          # deterministic, so this is derived rather than pasted.
+          BILLING_VIEW_ARN = "arn:aws:billing::${var.account_id}:billingview/primary"
         }
       }
     }

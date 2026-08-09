@@ -92,19 +92,49 @@ const instance = (): Promise<DuckDBInstanceType> => {
  * variables and refreshes them there; the default chain is `config`, which
  * looks for a `~/.aws/config` that Lambda does not have.
  */
-const configureS3 = async (connection: {
-  run: (sql: string) => Promise<unknown>;
-}): Promise<void> => {
-  await connection.run(`
-    LOAD httpfs;
-    LOAD aws;
-    CREATE OR REPLACE SECRET s3_role (
-      TYPE s3,
-      PROVIDER credential_chain,
-      CHAIN 'env',
-      REGION '${REGION}'
-    );
-  `);
+/**
+ * How long a resolved secret is trusted before being recreated.
+ *
+ * `credential_chain` resolves ONCE, at creation. Lambda rotates the credentials
+ * it publishes to the environment, and a container can outlive a rotation — so
+ * a secret cached for the life of the instance eventually starts signing with
+ * keys AWS no longer honours. Fifteen minutes is far inside any rotation window
+ * and still amortises the work across a burst.
+ */
+const SECRET_TTL_MS = 15 * 60 * 1000;
+
+let s3Ready: Promise<void> | null = null;
+let s3ReadyAt = 0;
+
+const configureS3 = (db: DuckDBInstanceType): Promise<void> => {
+  const now = Date.now();
+  if (s3Ready && now - s3ReadyAt < SECRET_TTL_MS) return s3Ready;
+
+  s3ReadyAt = now;
+  s3Ready = (async () => {
+    const connection = await db.connect();
+    try {
+      await connection.run(`
+        LOAD httpfs;
+        LOAD aws;
+        CREATE OR REPLACE SECRET s3_role (
+          TYPE s3,
+          PROVIDER credential_chain,
+          CHAIN 'env',
+          REGION '${REGION}'
+        );
+      `);
+    } finally {
+      connection.closeSync();
+    }
+  })().catch((error) => {
+    // A cached rejection would make one transient failure permanent for the
+    // life of the container.
+    s3Ready = null;
+    throw error;
+  });
+
+  return s3Ready;
 };
 
 /** Run a read-only query and return plain objects. */
@@ -117,7 +147,13 @@ export const query = async <T = Record<string, unknown>>(
   const connection = await db.connect();
 
   try {
-    if (options.s3) await configureS3(connection);
+    // Configured on the INSTANCE, before this connection runs anything — the
+    // secret manager is instance-wide, so five connections each issuing
+    // `CREATE OR REPLACE SECRET` at once is five concurrent alters of one
+    // catalogue entry. That is what a bundled page load does, and DuckDB
+    // rejects it with "Catalog write-write conflict on alter". One shared,
+    // memoised promise means the first caller creates it and the rest await it.
+    if (options.s3) await configureS3(db);
 
     // Parameters are bound, never interpolated. Every caller here passes values
     // that have already been through a zod schema, but binding is the habit that

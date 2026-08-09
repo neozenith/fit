@@ -1,5 +1,12 @@
-import { blockLabel, generateBlock, type Session, sessionRef } from "@fit/program";
-import { useEffect, useMemo, useState } from "react";
+import {
+  blockLabel,
+  generateBlock,
+  type Session,
+  sessionCompletion,
+  sessionRef,
+  sessionState,
+} from "@fit/program";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BlockProgress, type BlockSummary } from "../api.js";
 import { Banner, formatDate, formatShortDate, Loading } from "../components.jsx";
 import { useQueryParam } from "../router.jsx";
@@ -29,23 +36,9 @@ const STATE_LABEL: Record<SessionState, string> = {
 
 const DAY_MS = 86_400_000;
 
-const countable = (session: Session): string[] =>
-  session.exercises.filter((e) => e.sets.length > 0).map((e) => e.exercise);
-
-const stateOf = (session: Session, progress: BlockProgress, today: string): SessionState => {
-  const logged = progress[`${session.week}-${session.day}`] ?? {};
-  // Complete means every prescribed SET, not merely that the exercise was
-  // touched — counting exercises marked a session done after one set of four.
-  const expected = countable(session);
-  const done = session.exercises.filter(
-    (e) => e.sets.length > 0 && (logged[e.exercise]?.length ?? 0) >= e.sets.length,
-  ).length;
-  const touched = expected.filter((name) => (logged[name]?.length ?? 0) > 0).length;
-
-  if (expected.length > 0 && done >= expected.length) return "done";
-  if (touched > 0) return "partial";
-  return session.date > today ? "future" : "todo";
-};
+/** The log for one session, keyed by exercise. */
+const logFor = (session: Session, progress: BlockProgress) =>
+  progress[`${session.week}-${session.day}`] ?? {};
 
 const SPANS = [
   { value: "quarter", label: "3 months" },
@@ -56,15 +49,36 @@ const SPANS = [
 export const OverviewPage = () => {
   const [summaries, setSummaries] = useState<BlockSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
   const [selectedId, setSelected] = useQueryParam("block", "");
   const [span, setSpan] = useQueryParam("span", "year");
+  const [showDeleted, setShowDeleted] = useQueryParam("deleted", "");
+
+  const load = useCallback(
+    (includeDeleted: boolean) => api.blocks(includeDeleted).then((all) => setSummaries(all.blocks)),
+    [],
+  );
 
   useEffect(() => {
-    api
-      .blocks()
-      .then((all) => setSummaries(all.blocks))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
+    load(showDeleted === "true").catch((e: unknown) =>
+      setError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [load, showDeleted]);
+
+  const act = async (blockId: string, action: "delete" | "restore" | "reset") => {
+    setBusy(blockId);
+    setError(null);
+    setConfirming(null);
+    try {
+      await api.setBlockState(blockId, action);
+      await load(showDeleted === "true");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   if (error) return <Banner variant="error">{error}</Banner>;
   if (!summaries) return <Loading what="your blocks" />;
@@ -121,6 +135,24 @@ export const OverviewPage = () => {
               ))}
             </div>
           </fieldset>
+          <fieldset className="field">
+            <legend className="field__label">Deleted</legend>
+            <div className="segmented">
+              {[
+                { value: "", label: "Hidden" },
+                { value: "true", label: "Shown" },
+              ].map((option) => (
+                <button
+                  key={option.value || "hidden"}
+                  type="button"
+                  aria-pressed={showDeleted === option.value}
+                  onClick={() => setShowDeleted(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
           <div className="spacer" />
           <a className="button" href="/block-inputs">
             Plan a block
@@ -141,7 +173,7 @@ export const OverviewPage = () => {
               <button
                 key={summary.block.blockId}
                 type="button"
-                className={`timeline__row${active ? " timeline__row--active" : ""}`}
+                className={`timeline__row${active ? " timeline__row--active" : ""}${summary.deleted ? " timeline__row--deleted" : ""}`}
                 aria-pressed={active}
                 title={`${blockLabel(summary.block.blockId)} — ${formatDate(summary.firstDate)} to ${formatDate(summary.lastDate)}, ${summary.completeCount}/${summary.sessionCount} sessions${summary.supersededCount > 0 ? `, ${summary.supersededCount} earlier version${summary.supersededCount === 1 ? "" : "s"}` : ""}`}
                 onClick={() => setSelected(summary.block.blockId)}
@@ -175,7 +207,17 @@ export const OverviewPage = () => {
         )}
       </section>
 
-      {selected && <BlockDetail summary={selected} today={today} />}
+      {selected && (
+        <BlockDetail
+          summary={selected}
+          today={today}
+          busy={busy === selected.block.blockId}
+          confirming={confirming === selected.block.blockId}
+          onConfirm={() => setConfirming(selected.block.blockId)}
+          onCancel={() => setConfirming(null)}
+          onAct={(action) => act(selected.block.blockId, action)}
+        />
+      )}
     </>
   );
 };
@@ -189,7 +231,23 @@ export const OverviewPage = () => {
  * the LIVE block's sessions in hand and showed a paragraph of summary for every
  * other one, which made the timeline's rows selectable but not inspectable.
  */
-const BlockDetail = ({ summary, today }: { summary: BlockSummary; today: string }) => {
+const BlockDetail = ({
+  summary,
+  today,
+  busy,
+  confirming,
+  onConfirm,
+  onCancel,
+  onAct,
+}: {
+  summary: BlockSummary;
+  today: string;
+  busy: boolean;
+  confirming: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onAct: (action: "delete" | "restore" | "reset") => void;
+}) => {
   const { block, progress } = summary;
   const sessions = useMemo(() => {
     try {
@@ -216,6 +274,53 @@ const BlockDetail = ({ summary, today }: { summary: BlockSummary; today: string 
         </span>
       </h2>
 
+      {/* Manage the block from the block itself, rather than from a menu
+          somewhere else: the thing you are about to delete is on screen, with
+          its dates and its completion, which is most of what a confirmation
+          dialog would otherwise have to restate. */}
+      <div className="row block-actions">
+        {summary.deleted ? (
+          <>
+            <span className="pill">deleted</span>
+            <button type="button" disabled={busy} onClick={() => onAct("restore")}>
+              {busy ? "Working…" : "Restore"}
+            </button>
+          </>
+        ) : confirming ? (
+          <>
+            <span className="muted">
+              Delete {blockLabel(block.blockId)}? Its logged sets are kept and it can be restored.
+            </span>
+            <button
+              type="button"
+              className="danger"
+              disabled={busy}
+              onClick={() => onAct("delete")}
+            >
+              {busy ? "Working…" : "Yes, delete"}
+            </button>
+            <button type="button" disabled={busy} onClick={onCancel}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" disabled={busy} onClick={() => onAct("reset")}>
+              Reset progress
+            </button>
+            <button type="button" disabled={busy} onClick={onConfirm}>
+              Delete
+            </button>
+            {summary.resetAt && (
+              <span className="muted">
+                Reset {formatDate(summary.resetAt.slice(0, 10))} — earlier sets are kept but no
+                longer counted.
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
       {sessions.length === 0 ? (
         <p className="muted">
           {summary.completeCount}/{summary.sessionCount} sessions complete,{" "}
@@ -238,13 +343,9 @@ const BlockDetail = ({ summary, today }: { summary: BlockSummary; today: string 
                   </div>
                   <div className="calendar__days">
                     {weekSessions.map((session) => {
-                      const state = stateOf(session, progress, today);
-                      const logged = progress[`${session.week}-${session.day}`] ?? {};
-                      const expected = countable(session);
-                      const hit = session.exercises.filter(
-                        (e) =>
-                          e.sets.length > 0 && (logged[e.exercise]?.length ?? 0) >= e.sets.length,
-                      ).length;
+                      const log = logFor(session, progress);
+                      const state = sessionState(session, log, today);
+                      const { done, total } = sessionCompletion(session, log);
                       const ref = sessionRef(block.blockId, session.week, session.day);
                       return (
                         <a
@@ -253,12 +354,12 @@ const BlockDetail = ({ summary, today }: { summary: BlockSummary; today: string 
                           href={`/log?week=${session.week}&day=${session.day}`}
                           // The session reference is both the tooltip and the
                           // thing to quote when talking about one session.
-                          title={`${ref} — ${STATE_LABEL[state]}, ${hit}/${expected.length} exercises`}
+                          title={`${ref} — ${STATE_LABEL[state]}, ${done}/${total} exercises`}
                         >
                           <span className="day__date">{formatShortDate(session.date)}</span>
                           <span className="day__name">Day {session.day}</span>
                           <span className="day__meta">
-                            {hit}/{expected.length}
+                            {done}/{total}
                           </span>
                         </a>
                       );

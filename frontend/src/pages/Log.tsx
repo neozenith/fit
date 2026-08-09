@@ -1,4 +1,11 @@
-import type { BlockConfig, PrescribedExercise, PrescribedSet, Session } from "@fit/program";
+import {
+  type BlockConfig,
+  type PrescribedExercise,
+  type PrescribedSet,
+  requiredSets,
+  type Session,
+  sessionState,
+} from "@fit/program";
 import { useCallback, useEffect, useState } from "react";
 import { api, type BlockProgress, type LoggedSet } from "../api.js";
 import { Banner, formatDate, formatShortDate, Loading, repLabel } from "../components.jsx";
@@ -106,13 +113,10 @@ export const LogPage = () => {
   const loggedFor = (session: Session, exercise: string): LoggedSet[] =>
     progress[`${session.week}-${session.day}`]?.[exercise] ?? [];
 
-  const isDone = (session: Session): boolean => {
-    const expected = session.exercises.filter((e) => e.sets.length > 0);
-    return (
-      expected.length > 0 &&
-      expected.every((e) => loggedFor(session, e.exercise).length >= e.sets.length)
-    );
-  };
+  const logFor = (session: Session) => progress[`${session.week}-${session.day}`] ?? {};
+
+  const isDone = (session: Session): boolean =>
+    sessionState(session, logFor(session), today) === "done";
 
   // Default to the first INCOMPLETE session, not the nearest by date. A session
   // skipped last week is the one you are most likely to be looking for, and
@@ -213,17 +217,7 @@ export const LogPage = () => {
         <h2>Which session</h2>
         <div className="session-picker">
           {sessions.map((session) => {
-            const done = isDone(session);
-            const started = session.exercises.some(
-              (e) => loggedFor(session, e.exercise).length > 0,
-            );
-            const state = done
-              ? "done"
-              : started
-                ? "partial"
-                : session.date > today
-                  ? "future"
-                  : "todo";
+            const state = sessionState(session, logFor(session), today);
             const active = selected?.week === session.week && selected?.day === session.day;
             return (
               <button
@@ -313,7 +307,10 @@ const ExerciseSets = ({
   // there is always an empty row to record an extra set into.
   const prescribed = exercise.sets.length;
   const rows = Math.max(prescribed, logged.length + 1);
-  const complete = prescribed > 0 && logged.length >= prescribed;
+  // An UNPRESCRIBED exercise needs a single set: "do some rows" has no set
+  // count to satisfy, and treating it as never-completable made every session
+  // containing one permanently unfinished.
+  const complete = logged.length >= requiredSets(prescribed);
 
   return (
     <div className={`exercise-row${complete ? " exercise-row--logged" : ""}`}>

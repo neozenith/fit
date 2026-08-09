@@ -1,4 +1,4 @@
-import type { Session } from "@fit/program";
+import { type Session, sessionCompletion, sessionState } from "@fit/program";
 import { useEffect, useState } from "react";
 import { api, type BlockProgress } from "./api.js";
 
@@ -24,17 +24,16 @@ interface Progress {
   detail: string;
 }
 
-/** A session counts as complete when every prescribed SET is logged. */
-const isComplete = (session: Session, progress: BlockProgress): boolean => {
-  const expected = session.exercises.filter((e) => e.sets.length > 0);
-  return (
-    expected.length > 0 &&
-    expected.every(
-      (e) =>
-        (progress[`${session.week}-${session.day}`]?.[e.exercise]?.length ?? 0) >= e.sets.length,
-    )
-  );
-};
+/**
+ * Completion, from the SHARED rule.
+ *
+ * This file had its own copy, and it disagreed with the overview's: both
+ * filtered out exercises the program leaves unprescribed, so a session of four
+ * counted as two. One implementation, in the program package, is what stops the
+ * three surfaces drifting again.
+ */
+const isComplete = (session: Session, progress: BlockProgress, today: string): boolean =>
+  sessionState(session, progress[`${session.week}-${session.day}`] ?? {}, today) === "done";
 
 export const HeaderProgress = () => {
   const [bars, setBars] = useState<Progress[] | null>(null);
@@ -51,26 +50,20 @@ export const HeaderProgress = () => {
         // dated today: a session skipped on Monday is still the next thing to
         // do on Wednesday, and "today's session" would show an empty bar for a
         // rest day while hiding the work still outstanding.
-        const current = r.sessions.find((s) => !isComplete(s, progress)) ?? r.sessions.at(-1);
+        const current =
+          r.sessions.find((s) => !isComplete(s, progress, today)) ?? r.sessions.at(-1);
         if (!current) return;
 
         const inWeek = r.sessions.filter((s) => s.week === current.week);
-        const exercises = current.exercises.filter((e) => e.sets.length > 0);
-        const setsDone = exercises.reduce(
-          (n, e) =>
-            n +
-            Math.min(
-              e.sets.length,
-              progress[`${current.week}-${current.day}`]?.[e.exercise]?.length ?? 0,
-            ),
-          0,
+        const { setsDone, setsTotal } = sessionCompletion(
+          current,
+          progress[`${current.week}-${current.day}`] ?? {},
         );
-        const setsTotal = exercises.reduce((n, e) => n + e.sets.length, 0);
 
         setBars([
           {
             label: "Block",
-            done: r.sessions.filter((s) => isComplete(s, progress)).length,
+            done: r.sessions.filter((s) => isComplete(s, progress, today)).length,
             total: r.sessions.length,
             detail: `sessions · week ${current.week} of ${Math.max(
               ...r.sessions.map((s) => s.week),
@@ -78,7 +71,7 @@ export const HeaderProgress = () => {
           },
           {
             label: `Week ${current.week}`,
-            done: inWeek.filter((s) => isComplete(s, progress)).length,
+            done: inWeek.filter((s) => isComplete(s, progress, today)).length,
             total: inWeek.length,
             detail: current.date <= today ? "sessions" : "sessions · not started",
           },

@@ -1,0 +1,15 @@
+{
+  "name": "fit",
+  "short_name": "fit",
+  "description": "Candito 6-Week Strength Program tracker",
+  "start_url": "/overview",
+  "display": "standalone",
+  "background_color": "#faf8f9",
+  "theme_color": "#5c4295",
+  "icons": [
+    { "src": "/brand/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/brand/icon-256.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "/brand/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/brand/fit-icon-themed.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

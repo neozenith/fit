@@ -238,7 +238,12 @@ export const App = () => {
           <span className="visually-hidden">Sections</span>
         </button>
         <a className="brand" href="/overview">
-          fit
+          {/* The themed SVG, which resolves its own palette from
+              `prefers-color-scheme` and `data-theme` exactly as the stylesheet
+              does — so the mark inverts with the app rather than needing two
+              files and a swap. */}
+          <img className="brand__mark" src="/brand/fit-icon-themed.svg" alt="" />
+          <span>fit</span>
         </a>
         {envBadge && (
           <span className="pill pill--accent" title="You are not in production">

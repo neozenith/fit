@@ -1,4 +1,22 @@
 /**
+ * The display face, self-hosted.
+ *
+ * `--font-display` named Fraunces and nothing ever served it, so every heading
+ * and the wordmark silently fell through to Georgia. A brand face that only
+ * renders on machines that happen to have it installed is not a brand face.
+ *
+ * `swap` rather than `block`: the fallback metrics are close enough that a
+ * flash of Georgia beats a flash of nothing, and the file is preloaded in the
+ * document head so the swap usually happens before first paint.
+ */
+@font-face {
+  font-family: "Fraunces";
+  src: url("/fonts/Fraunces.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/**
  * Design tokens, derived from the OsakaNights theme.
  *
  * The token JSON (`design-tokens.json`) is the source of truth and is kept

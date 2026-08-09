@@ -74,6 +74,10 @@ export interface BlockSummary {
   lastDate: string;
   /** How many earlier versions of this block exist (ADR-0029). */
   supersededCount: number;
+  /** Hidden by a delete record. Its config and its logged sets still exist. */
+  deleted?: boolean;
+  /** Sets logged at or before this are excluded from progress. */
+  resetAt?: string | null;
 }
 
 /** One set as it was actually recorded. */
@@ -124,7 +128,15 @@ export const api = {
     }>("/api/blocks/current"),
 
   /** Every block with its own progress — the year view's single request. */
-  blocks: () => request<{ blocks: BlockSummary[] }>("/api/blocks"),
+  blocks: (includeDeleted = false) =>
+    request<{ blocks: BlockSummary[] }>(`/api/blocks${includeDeleted ? "?deleted=true" : ""}`),
+
+  /** Delete, restore or reset one block. All three are append-only. */
+  setBlockState: (blockId: string, action: "delete" | "restore" | "reset") =>
+    request<{ blockId: string; action: string; at: string }>(
+      `/api/blocks/${encodeURIComponent(blockId)}/state`,
+      { method: "POST", body: JSON.stringify({ action }) },
+    ),
 
   catalogue: () => request<{ exercises: CuratedExercise[] }>("/api/catalogue"),
 

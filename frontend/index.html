@@ -7,7 +7,27 @@
          not get a white flash on every navigation. -->
     <meta name="color-scheme" content="light dark" />
     <title>fit</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🏋️</text></svg>" />
+
+    <!-- The SVG favicon carries the SAME theme logic as the app: it defines its
+         palette from `prefers-color-scheme` and honours `data-theme`, so the tab
+         icon inverts with everything else. Browsers that ignore SVG favicons
+         fall through to the PNGs, which is why both are declared. -->
+    <link rel="icon" type="image/svg+xml" href="/brand/fit-icon-themed.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/icon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/brand/icon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/brand/icon-180.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#5c4295" />
+
+    <!-- Preloaded because it is the display face: the wordmark and every
+         heading use it, so a late swap reflows the page above the fold. -->
+    <link
+      rel="preload"
+      href="/fonts/Fraunces.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin="anonymous"
+    />
   </head>
   <body>
     <div id="root"></div>

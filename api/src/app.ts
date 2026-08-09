@@ -29,6 +29,7 @@ import {
 import { type Identity, UnauthenticatedError, userKey, verifyIdentity } from "./identity.js";
 import { type Item, putItem, putItems, queryByType, sortKey } from "./repo.js";
 import {
+  blockStateSchema,
   catalogueEntrySchema,
   createBlockSchema,
   finopsQuerySchema,
@@ -215,14 +216,73 @@ interface LoggedSet {
 }
 
 /**
+ * Delete, restore and reset — as APPEND-ONLY state records.
+ *
+ * The API role has no `DeleteItem` and observations are append-only (ADR-0013),
+ * so none of these three can remove a row. Each writes a `BSTATE#` record
+ * instead, and the latest one per block wins:
+ *
+ *   delete  — the block stops appearing. Its config and its logged sets survive.
+ *   restore — the same mechanism in reverse, which a real delete could not offer.
+ *   reset   — a watermark. Progress ignores sets logged at or before it, so the
+ *             block reads as untrained without unrecording anything you did.
+ *
+ * The prefix is `BSTATE#`, NOT `BLOCKSTATE#`: the block query is a
+ * `begins_with(sk, "BLOCK#")`, and any prefix starting with `BLOCK` would be
+ * swept into the block list itself.
+ */
+type BlockAction = "delete" | "restore" | "reset";
+
+interface BlockState {
+  blockId: string;
+  action: BlockAction;
+  at: string;
+}
+
+const blockStates = async (ctx: Context): Promise<Map<string, BlockState>> => {
+  const records = await queryByType<BlockState>("blocks", userKey(ctx.identity), "BSTATE", {
+    limit: 1000,
+  });
+  const latest = new Map<string, BlockState>();
+  for (const record of records) {
+    const existing = latest.get(record.blockId);
+    if (!existing || record.at > existing.at) latest.set(record.blockId, record);
+  }
+  return latest;
+};
+
+const setBlockState = async (
+  ctx: Context,
+  blockId: string,
+  action: BlockAction,
+): Promise<Response> => {
+  const at = nowIso();
+  await putItem("blocks", {
+    pk: userKey(ctx.identity),
+    // Timestamped, so the sequence of decisions is itself the record — you can
+    // see a block was deleted on Tuesday and restored on Thursday.
+    sk: `BSTATE#${blockId}#${at}`,
+    blockId,
+    action,
+    at,
+    actor: ctx.identity.actor,
+  });
+  return json({ blockId, action, at });
+};
+
+/**
  * Every block, with its own progress — the input to the year view.
  *
  * One `sets` query for all of them rather than one per block: the hot window is
  * thirteen months (ADR-0012), so the whole training year is a single partition
  * read, and N queries would be N round trips to slice data already in memory.
  */
-const getBlocks = async (ctx: Context): Promise<Response> => {
-  const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");
+const getBlocks = async (ctx: Context, url?: URL): Promise<Response> => {
+  const [items, states] = await Promise.all([
+    queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK"),
+    blockStates(ctx),
+  ]);
+  const includeDeleted = url?.searchParams.get("deleted") === "true";
 
   // Newest write wins per identity. Superseded versions stay in the table and
   // stay queryable; they simply are not the block any more.
@@ -244,10 +304,19 @@ const getBlocks = async (ctx: Context): Promise<Response> => {
   ).map(stripKeys) as SetRecord[];
 
   const blocks = [...latest.values()]
+    .filter((item) => includeDeleted || states.get(item.blockId)?.action !== "delete")
     .map((item) => {
       const config = stripKeys(item) as BlockConfig;
       const sessions = generateBlock(config);
-      const progress = sessionProgress(logged, config.blockId);
+      const state = states.get(config.blockId);
+      // A reset is a WATERMARK, not an erasure: sets logged at or before it are
+      // excluded from progress and remain in the log, so "start this block
+      // again" costs nothing and loses nothing.
+      const since = state?.action === "reset" ? state.at : undefined;
+      const progress = sessionProgress(
+        since ? logged.filter((r) => r.timestamp > since) : logged,
+        config.blockId,
+      );
       const complete = sessions.filter((session) => {
         const expected = session.exercises.filter((e) => e.sets.length > 0);
         return (
@@ -268,6 +337,8 @@ const getBlocks = async (ctx: Context): Promise<Response> => {
         firstDate: sessions[0]?.date ?? config.startDate,
         lastDate: sessions.at(-1)?.date ?? config.startDate,
         supersededCount: items.filter((i) => i.blockId === config.blockId).length - 1,
+        deleted: state?.action === "delete",
+        resetAt: since ?? null,
       };
     })
     // Chronological, which for these identifiers is also lexicographic.
@@ -277,18 +348,29 @@ const getBlocks = async (ctx: Context): Promise<Response> => {
 };
 
 const getCurrentBlock = async (ctx: Context): Promise<Response> => {
-  const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");
-  const config = currentBlockOf(items);
+  const [items, states] = await Promise.all([
+    queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK"),
+    blockStates(ctx),
+  ]);
+  // A deleted block is not the current one, however recently it started.
+  const config = currentBlockOf(
+    items.filter((item) => states.get(item.blockId)?.action !== "delete"),
+  );
   if (!config) return json({ block: null, sessions: [], progress: {}, blockCount: items.length });
 
   const logged = await queryByType<SetRecord>("sets", userKey(ctx.identity), "SET", {
     limit: 2000,
   });
+  const state = states.get(config.blockId);
+  const since = state?.action === "reset" ? state.at : undefined;
+  const records = (logged.map(stripKeys) as SetRecord[]).filter(
+    (r) => !since || r.timestamp > since,
+  );
 
   return json({
     block: config,
     sessions: generateBlock(config),
-    progress: sessionProgress(logged.map(stripKeys) as SetRecord[], config.blockId),
+    progress: sessionProgress(records, config.blockId),
     // How many blocks exist at all. The difference between "you have never made
     // one" and "you have five and this is the live one" is the first thing the
     // overview needs to say, and it cannot be inferred from a single config.
@@ -468,7 +550,13 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/me$/,
     handle: async (ctx) => json({ ...ctx.identity, environment: ENVIRONMENT }),
   },
-  { method: "GET", pattern: /^\/api\/blocks$/, handle: (ctx) => getBlocks(ctx) },
+  { method: "GET", pattern: /^\/api\/blocks$/, handle: (ctx, _req, url) => getBlocks(ctx, url) },
+  {
+    method: "POST",
+    pattern: /^\/api\/blocks\/([^/]+)\/state$/,
+    handle: async (ctx, req, _url, params) =>
+      setBlockState(ctx, params[0] as string, blockStateSchema.parse(await req.json()).action),
+  },
   {
     method: "POST",
     pattern: /^\/api\/blocks$/,

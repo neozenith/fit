@@ -10,6 +10,7 @@
 
 export * from "./calendar.js";
 export * from "./catalogue.js";
+export * from "./completion.js";
 export { ACCESSORY_OPTIONS, DEFAULT_ACCESSORIES } from "./defaults.js";
 export * from "./exercises.js";
 export * from "./identifiers.js";

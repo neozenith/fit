@@ -188,6 +188,52 @@ test.describe("overview", () => {
     await expect(page).toHaveURL(/[?&]block=/);
   });
 
+  test("a session tile counts every exercise, prescribed or not", async ({ page }) => {
+    await page.goto("/overview");
+    test.skip(!(await hasBlock(page)), "environment has no block yet");
+
+    const tiles = page.locator(".calendar a.day");
+    test.skip((await tiles.count()) === 0, "the selected block's sessions are not loaded");
+
+    // The bug: the denominator filtered out exercises the program deliberately
+    // leaves unprescribed, so W1D1 read `0/2` while the session below it listed
+    // four. The count on the tile must match what the session actually holds.
+    const meta = await tiles.first().locator(".day__meta").innerText();
+    const total = Number(meta.split("/")[1]);
+    expect(total).toBeGreaterThan(0);
+
+    await tiles.first().click();
+    await expect(page.locator("main h1")).toHaveText("Log a session");
+    const exercises = await page.locator(".exercise-row").count();
+    expect(exercises, "tile denominator must equal the session's exercises").toBe(total);
+  });
+
+  test("a block can be deleted and restored", async ({ page }, testInfo) => {
+    // LOCAL ONLY: this writes block state, which is shared for the environment.
+    test.skip(testInfo.project.name !== "local", "writes block state");
+
+    await page.goto("/overview");
+    test.skip(!(await hasBlock(page)), "environment has no block yet");
+
+    const before = await page.locator(".timeline__row").count();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    // Two steps, and the block being deleted is on screen throughout — which is
+    // most of what a confirmation dialog would otherwise have to restate.
+    await page.getByRole("button", { name: "Yes, delete" }).click();
+    await expect.poll(async () => page.locator(".timeline__row").count()).toBeLessThan(before);
+
+    // Restore, because none of this deletes anything: storage is append-only
+    // (ADR-0013), so "delete" is a state record and the reverse costs nothing.
+    await page
+      .getByRole("group", { name: "Deleted" })
+      .getByRole("button", { name: "Shown" })
+      .click();
+    await expect(page.locator(".timeline__row--deleted").first()).toBeVisible();
+    await page.locator(".timeline__row--deleted").first().click();
+    await page.getByRole("button", { name: "Restore" }).click();
+    await expect.poll(async () => page.locator(".timeline__row--deleted").count()).toBe(0);
+  });
+
   test("the timeline span is a filter like any other", async ({ page }) => {
     await page.goto("/overview");
     test.skip(!(await hasBlock(page)), "environment has no block yet");
@@ -344,21 +390,37 @@ test.describe("log", () => {
     // sets are all logged from an earlier run — which still shows an empty
     // extra-set row, so the click lands but has no prescribed reps to save and
     // the count correctly does not move.
-    const row = page.locator(".exercise-row:not(.exercise-row--logged)").first();
-    await expect(row.or(page.getByText(/no training block/i)).first()).toBeVisible();
-    test.skip(!(await row.isVisible()), "every exercise in this session is complete");
+    const incomplete = page.locator(".exercise-row:not(.exercise-row--logged)").first();
+    await expect(incomplete.or(page.getByText(/no training block/i)).first()).toBeVisible();
+    test.skip(!(await incomplete.isVisible()), "every exercise in this session is complete");
 
-    const tick = row.locator(".set-row:not(.set-row--done) .set-row__save").first();
-    const before = Number((await row.locator(".pill").innerText()).split("/")[0]?.trim() ?? "0");
-    await tick.click();
+    // Located by NAME, not by `:not(.exercise-row--logged)`. Logging the last
+    // outstanding set adds that class, so the original locator stops matching
+    // the very row the action just changed — and the assertion fails on the
+    // success case.
+    const name = (await incomplete.locator("strong").innerText()).trim();
+    const row = page.locator(".exercise-row").filter({ hasText: name }).first();
+
+    // The pill reads "2 / 4 sets" when the exercise is prescribed and "0 sets"
+    // when it is not, so the count is the LEADING integer rather than the part
+    // before a slash that may not be there.
+    const loggedCount = async (): Promise<number> =>
+      Number(/^\d+/.exec((await row.locator(".pill").innerText()).trim())?.[0] ?? "0");
+
+    const pending = row.locator(".set-row:not(.set-row--done)").first();
+    const reps = pending.locator("input").nth(1);
+
+    // An UNPRESCRIBED exercise has no rep target, so the save correctly refuses
+    // an empty one — there is nothing to confirm. Typing a count first is what
+    // a person does, and it is the only path for those exercises.
+    if ((await reps.inputValue()) === "") await reps.fill("10");
+
+    const before = await loggedCount();
+    await pending.locator(".set-row__save").click();
 
     // The count comes back from the SERVER, recomputed from the log, not from
     // optimistic local state — so this also proves the write landed.
-    await expect
-      .poll(async () =>
-        Number((await row.locator(".pill").innerText()).split("/")[0]?.trim() ?? "0"),
-      )
-      .toBeGreaterThan(before);
+    await expect.poll(loggedCount).toBeGreaterThan(before);
 
     // One SET, not one exercise. A four-set prescription needs four taps, so
     // asserting the exercise went green here would be asserting the old

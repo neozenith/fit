@@ -75,12 +75,23 @@ a {
 /* The wordmark is the one place the display face and the accent both appear
    without competing with anything: it is the app's name, not a heading. */
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 1.35rem;
   letter-spacing: -0.01em;
   color: var(--accent);
   text-decoration: none;
+}
+
+/* The mark is decorative — the word beside it is the accessible name, which is
+   why the `img` carries an empty `alt` rather than repeating it. */
+.brand__mark {
+  width: 1.6rem;
+  height: 1.6rem;
+  display: block;
 }
 
 .who {
@@ -1372,4 +1383,33 @@ button:disabled {
   margin-top: var(--s4);
   padding-top: var(--s4);
   border-top: 1px solid var(--border);
+}
+
+/* --- Block management -------------------------------------------------------- */
+
+.block-actions {
+  gap: var(--s3);
+  align-items: center;
+  margin-bottom: var(--s4);
+  flex-wrap: wrap;
+}
+
+/* A destructive action looks destructive, but only once confirmed — the first
+   button opens the confirmation and is styled like any other. Colouring the
+   opener red would make a two-step action look like a one-step one. */
+.danger {
+  border-color: var(--status-critical);
+  background: var(--status-critical);
+  color: #fff;
+}
+
+.danger:hover {
+  filter: brightness(1.08);
+}
+
+/* Deleted blocks stay on the timeline when shown, drawn as struck through so
+   "hidden" and "gone" are visibly different states. */
+.timeline__row--deleted .timeline__label {
+  text-decoration: line-through;
+  opacity: 0.65;
 }

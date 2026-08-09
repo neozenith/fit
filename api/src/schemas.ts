@@ -217,3 +217,15 @@ export const catalogueEntrySchema = z.object({
   /** Hidden from pickers without erasing its history (ADR-0013). */
   retired: z.boolean().optional(),
 });
+
+/**
+ * Delete, restore or reset one block.
+ *
+ * All three are APPEND-ONLY state records, not mutations — the API role has no
+ * `DeleteItem` (ADR-0013), so "delete" hides a block and "reset" watermarks its
+ * progress. Nothing written is ever unwritten, which is what makes `restore` a
+ * first-class action rather than a recovery procedure.
+ */
+export const blockStateSchema = z.object({
+  action: z.enum(["delete", "restore", "reset"]),
+});

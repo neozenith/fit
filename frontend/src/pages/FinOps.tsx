@@ -100,7 +100,11 @@ const Recency = ({
         <div>
           <div className="muted">Rows in the export</div>
           <div className="stat-value mono">{recency.rows.toLocaleString()}</div>
-          <div className="muted">Hourly granularity</div>
+          {/* "Configured", not "is": the export was switched to hourly, and AWS
+              regenerates on its own cadence — so the rows on hand can still be
+              the previous daily grain for a refresh cycle. Claiming otherwise
+              would be a statement the data does not yet support. */}
+          <div className="muted">Export configured hourly</div>
         </div>
       </div>
     </section>

@@ -40,6 +40,9 @@ const ENVIRONMENTS = [
   { value: "prod", label: "prod" },
 ];
 
+/** "1 day", "2 days" — a heading reading "over 1 days" looks like a bug. */
+const unit = (n: number, word: string): string => (n === 1 ? word : `${word}s`);
+
 const USD = (v: number): string =>
   v >= 1 ? `$${v.toFixed(2)}` : v > 0 ? `$${v.toFixed(4)}` : "$0";
 
@@ -158,7 +161,7 @@ export const FinOpsPage = () => {
           {USD(total)}
           <span className="muted">
             {" "}
-            over {periods.length} {data?.grain === "day" ? "days" : "months"}
+            over {periods.length} {unit(periods.length, data?.grain === "day" ? "day" : "month")}
             {environment ? ` in ${environment}` : ""}
           </span>
         </h2>
@@ -175,6 +178,11 @@ export const FinOpsPage = () => {
             layout={{
               barmode: "stack",
               yaxis: { title: { text: "USD" }, tickformat: "$,.4f" },
+              // Without this a single period stretches its bar across the whole
+              // plot, because Plotly sizes bars from the spacing between points
+              // and one point has none. A one-day range is the common case for
+              // a freshly created export.
+              ...(periods.length === 1 ? { bargap: 0.8 } : {}),
             }}
           />
         )}

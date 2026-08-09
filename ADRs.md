@@ -861,3 +861,85 @@ facts, so a disagreement with the old workbook is a question with an answer.
 > imported as data is an answer with no question attached: it cannot be
 > re-derived, cannot be checked, and silently carries whatever assumptions its
 > author had at the time.
+
+## ADR-0027 — Every view is a URL
+
+**Status:** Accepted — supersedes the routing decision in ADR-0024's commentary
+
+**Context.** The SPA used hash routing and held every filter in component state.
+Both were defensible when the app had six pages and one chart. Neither survived
+the history import: the value of a chart here is that it can be *pointed at* —
+"look at squat volume in the 2022 block" is a sentence that should be a link.
+
+Hash routing was chosen because it needs no server cooperation. That reason had
+already expired: ADR-0024 moved the SPA fallback into the edge authenticator,
+which rewrites **any** extensionless non-`/api/` path to `/index.html`. Real
+paths therefore cost nothing.
+
+**Decision.** Path routing, and **all filter state in the query string**.
+
+- `/history/volume?grain=week&exercise=Barbell%20Back%20Squat` opens exactly
+  that chart.
+- The one-page History surface became six subpages, each its own address, so
+  feedback can name one chart rather than a region of a long scroll.
+- The exercise catalogue became a root page: it is a reference for the whole
+  app, and filing it under history implied it only described the archive.
+
+**Two rules make this real rather than decorative.**
+
+*A control must never hold state the URL does not.* The failure is silent — the
+chart changes, the address bar does not, and the link you send shows something
+else. `useQueryParam` is the only state primitive these pages use.
+
+*Writing a default REMOVES its parameter.* Otherwise every page accumulates
+`?grain=month&window=all&environment=`, two identical views carry different
+URLs, and the one parameter that was actually changed is buried.
+
+**Consequences.**
+
+- Filter changes use `replaceState`, so adjusting a range six times leaves one
+  history entry rather than six. The URL still updates; only the back button
+  differs.
+- Nav is real `<a href>` with click interception, so ⌘-click, middle-click and
+  "copy link address" all work. Buttons would have broken all three.
+- e2e asserts the URL, not just the render — a router that shows the right page
+  while leaving the address bar behind fails the entire point.
+
+> **Lens.** If a view is worth discussing, it must be worth linking to. State
+> that lives only in memory can be described but never *shown*, and a
+> screenshot is what people fall back on when a URL cannot do the job.
+
+## ADR-0028 — Plotly, and one chart implementation
+
+**Status:** Accepted — supersedes the hand-drawn charts
+
+**Context.** The SVG charts were hand-drawn on the reasoning that three
+monotone series over a date axis need no library, and that a charting
+dependency would outweigh the rest of the bundle. Both were true.
+
+They stopped being true at nine charts across seven pages, needing hover
+readouts, zoom over a five-year axis, legend toggling and stacked bars.
+Building those is how "a small dependency-free chart" becomes a chart library
+with no documentation and no tests.
+
+**Decision.** `plotly.js-basic-dist-min`, loaded dynamically, with the theme
+resolved from CSS custom properties at draw time.
+
+- **basic**, not the full build: scatter and bar are every trace this app draws.
+- **dynamic import** — genuine code-splitting, not a hidden optional dependency.
+  Today, Block and Log never download it.
+- **Colours read from `getComputedStyle`.** Plotly takes literals, so a theme
+  cannot be applied by CSS; handing it `var(--muted)` renders black with no
+  error, which is the worst kind of failure because it looks deliberate.
+- **Charts redraw on theme change**, watched via `MutationObserver` on
+  `data-theme` plus a `prefers-color-scheme` listener. The second is not
+  redundant: the default "Auto" setting stamps no attribute at all.
+
+**Consequences.** The hand-drawn `LineChart` and `BarChart` are deleted, and
+the two pages that still used them moved over — one implementation, so a
+feature added to charts is added to all of them.
+
+> **Lens.** A dependency-free implementation is right until the requirements
+> grow interaction. Count the *behaviours* being reimplemented, not the lines:
+> hover, zoom, legend and axis formatting are a library's worth of work
+> whatever the file size says.

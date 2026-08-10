@@ -134,6 +134,20 @@ export const respond = (status, statusDescription, body, headers = {}) => ({
  * all. `reason` is operator-facing text and never echoes anything the caller
  * supplied.
  */
+export const chooserPage = (choices) =>
+  `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+  `<title>Sign in</title>` +
+  `<style>body{font:16px/1.5 system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;` +
+  `background:#0f1115;color:#e6e8eb}main{max-width:20rem;width:100%;padding:2rem}h1{font-size:1.25rem;margin:0 0 1rem}` +
+  `a{display:block;padding:.75rem 1rem;margin:0 0 .5rem;border:1px solid #2a2f3a;border-radius:.5rem;` +
+  `color:#e6e8eb;text-decoration:none;text-align:center}a:hover{border-color:#7aa2f7}</style>` +
+  `<main><h1>Sign in</h1>` +
+  // The label comes from PROFILES, never from the request, so there is nothing
+  // here for a caller to inject. Same for href: the idp key is already known to
+  // be one of ours because it survived the availability filter.
+  choices.map((c) => `<a href="${c.href}">Continue with ${c.label}</a>`).join("") +
+  `</main>`;
+
 export const errorPage = (title, reason, links = []) =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
   `<title>${title}</title>` +

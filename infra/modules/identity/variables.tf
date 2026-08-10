@@ -28,11 +28,27 @@ variable "entra_client_id" {
   type        = string
 }
 
+variable "google_client_id" {
+  description = <<-EOT
+    Google OAuth web-application client id. One credential serves every
+    environment, with every environment's redirect URI registered on it — the
+    same reasoning as the single EntraID registration (ADR-0035).
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("\\.apps\\.googleusercontent\\.com$", var.google_client_id))
+    error_message = "google_client_id must be a *.apps.googleusercontent.com identifier."
+  }
+}
+
 variable "allowed_users" {
   description = <<-EOT
-    Email addresses admitted after the tenant check passes. An empty list
-    admits NOBODY — the fail-closed direction — because the tenant check alone
-    would let in every account in the directory (ADR-0010).
+    Email addresses admitted after the provider's own check passes — Entra's
+    tenant check, Google's `email_verified`. ONE list across providers: an
+    address is admitted whoever vouches for it. An empty list admits NOBODY —
+    the fail-closed direction — because the provider check alone would let in
+    every account the provider will vouch for (ADR-0010, ADR-0035).
   EOT
   type        = list(string)
 

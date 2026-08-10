@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { hmac, nonce, pkceChallenge, safeEqual, sign, verify } from "./crypto.mjs";
+import { buildConfig, relativeKey } from "./params.mjs";
+import { availableIdps, PROFILES } from "./providers.mjs";
 import {
   allowedHosts,
+  chooserPage,
   cookie,
   isAllowedHost,
   isSpaRoute,
@@ -249,6 +252,221 @@ describe("the public path carve-out is exact, never a prefix", () => {
     // `startsWith("/api/health")` carve-out would admit the first four, and the
     // traversal case would reach a protected handler unauthenticated.
     expect(PUBLIC_PATHS.has(uri)).toBe(false);
+  });
+});
+
+describe("SSM parameters are keyed by path, never by leaf name", () => {
+  const PREFIX = "/fit/dev";
+
+  test("two providers' client ids do not collide", () => {
+    // The bug this exists to prevent: keying by `name.split('/').pop()` puts
+    // both providers' client_id on the same key, and the winner is whichever
+    // page of the recursive read arrived last. Google sign-in then goes out
+    // with the Entra client id, and nothing anywhere says so.
+    const raw = {
+      "/fit/dev/auth/entra/client_id": "entra-id",
+      "/fit/dev/auth/google/client_id": "google-id",
+    };
+    const flat = Object.fromEntries(
+      Object.entries(raw).map(([name, value]) => [relativeKey(name, PREFIX), value]),
+    );
+    expect(flat).toEqual({
+      "auth/entra/client_id": "entra-id",
+      "auth/google/client_id": "google-id",
+    });
+  });
+
+  test("the prefix itself maps to an empty key rather than throwing", () => {
+    expect(relativeKey(PREFIX, PREFIX)).toBe("");
+  });
+});
+
+describe("configuration assembly", () => {
+  const BUNDLED = { fqdn: "fit-dev.jpeak.ai", ssmPrefix: "/fit/dev" };
+
+  const build = (overrides = {}) =>
+    buildConfig(BUNDLED, {
+      "auth/session_hmac_key": KEY,
+      "auth/allowed_users": "JP@example.com, someone@gmail.com",
+      "auth/entra/tenant_id": "tenant-guid",
+      "auth/entra/client_id": "entra-id",
+      "auth/entra/client_secret": "entra-secret",
+      "auth/google/client_id": "google-id",
+      "auth/google/client_secret": "google-secret",
+      ...overrides,
+    });
+
+  test("each provider gets its own credentials, not the other's", () => {
+    const c = build();
+    expect(c.providers.entra.clientId).toBe("entra-id");
+    expect(c.providers.google.clientId).toBe("google-id");
+    expect(c.providers.entra.clientSecret).toBe("entra-secret");
+    expect(c.providers.google.clientSecret).toBe("google-secret");
+  });
+
+  test("the allow-list is one list across providers, lower-cased and trimmed", () => {
+    expect(build().allowedUsers).toEqual(["jp@example.com", "someone@gmail.com"]);
+  });
+
+  test("an empty allow-list admits nobody rather than an empty email", () => {
+    expect(build({ "auth/allowed_users": "" }).allowedUsers).toEqual([]);
+    expect(build({ "auth/allowed_users": undefined }).allowedUsers).toEqual([]);
+  });
+
+  test("the unseeded sentinel is not mistaken for a secret", () => {
+    const c = build({ "auth/google/client_secret": "UNSEEDED" });
+    expect(c.providers.google.secretSeeded).toBe(false);
+    expect(c.providers.entra.secretSeeded).toBe(true);
+  });
+
+  test("the secret path is carried so a 500 can name what to seed", () => {
+    expect(build().providers.google.secretPath).toBe("/fit/dev/auth/google/client_secret");
+  });
+});
+
+describe("provider availability drives the chooser", () => {
+  const seeded = (extra = {}) => ({
+    providers: {
+      entra: { clientId: "e", tenantId: "t", secretSeeded: true },
+      google: { clientId: "g", secretSeeded: true },
+      ...extra,
+    },
+  });
+
+  test("both seeded providers are offered, in a stable order", () => {
+    expect(availableIdps(seeded())).toEqual(["entra", "google"]);
+  });
+
+  test("an unseeded secret hides the provider rather than offering a dead button", () => {
+    expect(availableIdps(seeded({ google: { clientId: "g", secretSeeded: false } }))).toEqual([
+      "entra",
+    ]);
+  });
+
+  test("a half-configured Entra (no tenant) is not offered", () => {
+    // Without a tenant id there is no issuer to check a token against, so the
+    // flow could only fail — after a redirect, at the callback, opaquely.
+    expect(availableIdps(seeded({ entra: { clientId: "e", secretSeeded: true } }))).toEqual([
+      "google",
+    ]);
+  });
+
+  test("an environment with nothing seeded offers nothing", () => {
+    expect(availableIdps({ providers: {} })).toEqual([]);
+    expect(availableIdps({})).toEqual([]);
+  });
+});
+
+describe("admission is provider-specific AND allow-listed", () => {
+  const ALLOWED = ["jp@jpeakai.onmicrosoft.com", "someone@gmail.com"];
+  const ENTRA = { tenantId: "the-tenant", clientId: "entra-id" };
+
+  test("Entra admits only its own tenant", () => {
+    const claims = { tid: "the-tenant", email: "jp@jpeakai.onmicrosoft.com" };
+    expect(PROFILES.entra.admit(claims, ENTRA, ALLOWED)).toEqual({
+      ok: true,
+      email: "jp@jpeakai.onmicrosoft.com",
+    });
+    expect(PROFILES.entra.admit({ ...claims, tid: "another-tenant" }, ENTRA, ALLOWED).ok).toBe(
+      false,
+    );
+  });
+
+  test("Entra falls back through the claims Microsoft actually populates", () => {
+    const base = { tid: "the-tenant" };
+    expect(
+      PROFILES.entra.admit({ ...base, preferred_username: "someone@gmail.com" }, ENTRA, ALLOWED).ok,
+    ).toBe(true);
+    expect(PROFILES.entra.admit({ ...base, upn: "someone@gmail.com" }, ENTRA, ALLOWED).ok).toBe(
+      true,
+    );
+  });
+
+  test("Google requires a VERIFIED address", () => {
+    // The Google analogue of the tenant check. A Workspace admin can put any
+    // address in the `email` claim; only `email_verified` says Google vouches
+    // for it, so without this check the allow-list is bypassable by anyone who
+    // controls any Workspace domain.
+    expect(
+      PROFILES.google.admit({ email: "someone@gmail.com", email_verified: true }, {}, ALLOWED),
+    ).toEqual({ ok: true, email: "someone@gmail.com" });
+
+    expect(
+      PROFILES.google.admit({ email: "someone@gmail.com", email_verified: false }, {}, ALLOWED).ok,
+    ).toBe(false);
+    expect(PROFILES.google.admit({ email: "someone@gmail.com" }, {}, ALLOWED).ok).toBe(false);
+  });
+
+  test("a verified address that is not allow-listed is still refused", () => {
+    expect(
+      PROFILES.google.admit({ email: "stranger@gmail.com", email_verified: true }, {}, ALLOWED).ok,
+    ).toBe(false);
+  });
+
+  test("an empty allow-list admits nobody from either provider", () => {
+    expect(
+      PROFILES.google.admit({ email: "someone@gmail.com", email_verified: true }, {}, []).ok,
+    ).toBe(false);
+    expect(
+      PROFILES.entra.admit({ tid: "the-tenant", email: "jp@jpeakai.onmicrosoft.com" }, ENTRA, [])
+        .ok,
+    ).toBe(false);
+  });
+
+  test("a token with no usable email claim is refused, not admitted as empty", () => {
+    expect(PROFILES.entra.admit({ tid: "the-tenant" }, ENTRA, ALLOWED).ok).toBe(false);
+    expect(PROFILES.google.admit({ email_verified: true }, {}, ALLOWED).ok).toBe(false);
+  });
+});
+
+describe("provider endpoints", () => {
+  test("Entra's URLs are tenant-scoped and its issuer is the v2.0 form", () => {
+    const p = { tenantId: "the-tenant" };
+    expect(PROFILES.entra.authorizeUrl(p)).toContain("/the-tenant/oauth2/v2.0/authorize");
+    expect(PROFILES.entra.issuers(p)).toEqual([
+      "https://login.microsoftonline.com/the-tenant/v2.0",
+    ]);
+  });
+
+  test("Google accepts both issuer spellings it has ever minted", () => {
+    // Not a loosening: unlike Entra's v1.0/v2.0 split these are the same app
+    // model, and pinning one produces failures that depend on which endpoint
+    // served the token.
+    expect(PROFILES.google.issuers({})).toEqual([
+      "https://accounts.google.com",
+      "accounts.google.com",
+    ]);
+  });
+
+  test("only Entra offers a provider logout", () => {
+    // Google's endpoints are account-wide or revoke consent entirely, so
+    // signing out of this app would sign the user out of Gmail.
+    expect(PROFILES.entra.logoutUrl({ tenantId: "t" }, "https://fit.jpeak.ai/")).toContain(
+      "post_logout_redirect_uri=https%3A%2F%2Ffit.jpeak.ai%2F",
+    );
+    expect(PROFILES.google.logoutUrl).toBeNull();
+  });
+
+  test("Google is asked to show the account picker every time", () => {
+    expect(PROFILES.google.authParams().prompt).toBe("select_account");
+    expect(PROFILES.entra.authParams().response_mode).toBe("query");
+  });
+});
+
+describe("the chooser page", () => {
+  test("one link per available provider", () => {
+    const html = chooserPage([
+      { idp: "entra", label: "Microsoft", href: "/oauth2/start?idp=entra&next=%2F" },
+      { idp: "google", label: "Google", href: "/oauth2/start?idp=google&next=%2F" },
+    ]);
+    expect(html).toContain("Continue with Microsoft");
+    expect(html).toContain("Continue with Google");
+    expect(html).toContain("idp=google");
+  });
+
+  test("labels come from PROFILES, so there is no caller-controlled text", () => {
+    const html = chooserPage([{ idp: "google", label: PROFILES.google.label, href: "/x" }]);
+    expect(html).not.toContain("<script");
   });
 });
 

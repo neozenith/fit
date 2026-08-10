@@ -1,7 +1,8 @@
-import { isSeeded, loadConfig } from "./config.mjs";
+import { loadConfig } from "./config.mjs";
 import { hmac, nonce, pkceChallenge, sha256Hex, sign, verify } from "./crypto.mjs";
-import { PROFILES, verifyIdToken } from "./providers.mjs";
+import { availableIdps, PROFILES, verifyIdToken } from "./providers.mjs";
 import {
+  chooserPage,
   cookie,
   errorPage,
   headerValue,
@@ -23,8 +24,6 @@ import {
  * without one was not. The origin verifies that signature and trusts nothing
  * else — it has no login code, no session store and no IdP dependency.
  */
-
-const IDP = "entra"; // one provider (ADR-0010); PROFILES is the seam for a second
 
 const SESSION_COOKIE = "__session";
 const TXN_COOKIE = "__oauth";
@@ -111,60 +110,118 @@ const redirect = (location, cookies = []) =>
 
 // --- OAuth handlers ----------------------------------------------------------
 
-const startLogin = async (config, host, next) => {
-  if (!isSeeded(config.clientSecret)) {
-    // Naming the parameter turns a dead environment into a one-line fix. The
-    // alternative — a generic 403 — is indistinguishable from a real denial.
+/**
+ * Nothing is seeded, so there is nothing to sign in with.
+ *
+ * Naming the parameters turns a dead environment into a one-line fix. The
+ * alternative — a generic 403 — is indistinguishable from a real denial. Every
+ * provider with a client id is listed, because which one the operator meant to
+ * seed is not knowable from here.
+ */
+const misconfigured = (config) => {
+  const pending = Object.entries(config.providers ?? {})
+    .filter(([idp, p]) => PROFILES[idp].configured(p))
+    .map(([, p]) => `<code>${p.secretPath}</code>`);
+
+  return respond(
+    500,
+    "Misconfigured",
+    errorPage(
+      "Sign-in is not configured",
+      pending.length === 0
+        ? "No identity provider is configured for this environment."
+        : `No client secret has been seeded. Set one of ${pending.join(" or ")} and try again.`,
+    ),
+  );
+};
+
+/**
+ * Resolve which provider a sign-in should use.
+ *
+ * A caller-supplied `idp` is honoured ONLY if it names a configured provider —
+ * an unknown value falls through to the chooser rather than erroring, because
+ * the value reaches us from a link the user may have bookmarked before a
+ * provider was retired.
+ *
+ * With exactly one provider available the chooser is skipped entirely, which is
+ * what preserves the original single-provider behaviour (ADR-0010) unchanged in
+ * an environment where only Entra is seeded.
+ */
+const chooseIdp = (config, requested) => {
+  const available = availableIdps(config);
+  if (requested && available.includes(requested)) return requested;
+  if (available.length === 1) return available[0];
+  return null;
+};
+
+const startLogin = async (config, host, next, requested) => {
+  const available = availableIdps(config);
+  if (available.length === 0) return misconfigured(config);
+
+  const idp = chooseIdp(config, requested);
+  if (!idp) {
+    // More than one provider and no choice made. The chooser is the ONLY place
+    // this decision happens; every other path already has an `idp` in hand.
     return respond(
-      500,
-      "Misconfigured",
-      errorPage(
-        "Sign-in is not configured",
-        `The client secret has not been seeded. Set the SSM parameter ` +
-          `<code>${config.clientSecretPath}</code> and try again.`,
+      200,
+      "OK",
+      chooserPage(
+        available.map((k) => ({
+          idp: k,
+          label: PROFILES[k].label,
+          href: `/oauth2/start?idp=${k}&next=${encodeURIComponent(safePath(next))}`,
+        })),
       ),
     );
   }
 
-  const profile = PROFILES[IDP];
+  // Both are guaranteed present: `idp` came from `availableIdps`, which already
+  // required a configured profile and a seeded secret.
+  const profile = PROFILES[idp];
+  const provider = config.providers[idp];
+
   const verifier = nonce(48);
   const loginNonce = nonce();
 
   // The transaction rides the browser because the edge is stateless across the
   // IdP round trip. It is signed, so the browser carries it without being able
   // to alter which provider, nonce or verifier the callback will check against.
+  //
+  // `idp` inside the signature is what makes two providers safe on one callback
+  // URL: the callback uses the provider the START chose, never one the query
+  // string names, so a code minted by one provider cannot be redeemed against
+  // the other's token endpoint and client secret.
   const txn = sign(config.sessionKey, {
     n: loginNonce,
     v: verifier,
-    idp: IDP,
+    idp,
     h: host,
     p: safePath(next),
     exp: seconds() + TXN_TTL_S,
   });
 
   const params = new URLSearchParams({
-    client_id: config.clientId,
+    client_id: provider.clientId,
     response_type: "code",
     // Must be byte-identical to the value sent at token exchange, which is why
     // the chosen host travels inside the signed transaction rather than being
     // re-derived from the callback's own Host header.
     redirect_uri: redirectUri(host, config),
     scope: profile.scopes,
-    response_mode: "query",
     nonce: loginNonce,
     state: loginNonce,
     code_challenge: pkceChallenge(verifier),
     code_challenge_method: "S256",
+    ...profile.authParams(),
   });
 
-  return redirect(`${profile.authorizeUrl(config)}?${params}`, [
+  return redirect(`${profile.authorizeUrl(provider)}?${params}`, [
     cookie(TXN_COOKIE, txn, { maxAge: TXN_TTL_S }),
   ]);
 };
 
 const completeLogin = async (config, request, cookies) => {
   const query = new URLSearchParams(request.querystring ?? "");
-  const profile = PROFILES[IDP];
 
   const txn = verify(config.sessionKey, cookies[TXN_COOKIE]);
   if (!txn) {
@@ -189,6 +246,22 @@ const completeLogin = async (config, request, cookies) => {
     );
   }
 
+  // The provider comes from the SIGNED transaction, never from the query
+  // string. A callback that could name its own provider would let a code minted
+  // by one IdP be exchanged at the other's token endpoint, under the other's
+  // client secret.
+  const profile = PROFILES[txn.idp];
+  const provider = config.providers?.[txn.idp];
+  if (!profile || !provider?.secretSeeded) {
+    return respond(
+      403,
+      "Forbidden",
+      errorPage("Sign-in could not be completed", "That provider is no longer configured.", [
+        { href: "/", label: "Start again" },
+      ]),
+    );
+  }
+
   const code = query.get("code");
   if (!code) {
     return respond(
@@ -199,15 +272,15 @@ const completeLogin = async (config, request, cookies) => {
   }
 
   const body = new URLSearchParams({
-    client_id: config.clientId,
-    client_secret: config.clientSecret,
+    client_id: provider.clientId,
+    client_secret: provider.clientSecret,
     grant_type: "authorization_code",
     code,
     redirect_uri: redirectUri(txn.h, config),
     code_verifier: txn.v,
   });
 
-  const tokenResponse = await fetch(profile.tokenUrl(config), {
+  const tokenResponse = await fetch(profile.tokenUrl(provider), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body,
@@ -221,7 +294,7 @@ const completeLogin = async (config, request, cookies) => {
   }
 
   const { id_token: idToken } = await tokenResponse.json();
-  const claims = await verifyIdToken(idToken, profile, config, txn.n);
+  const claims = await verifyIdToken(idToken, profile, provider, txn.n);
   if (!claims) {
     return respond(
       403,
@@ -230,7 +303,7 @@ const completeLogin = async (config, request, cookies) => {
     );
   }
 
-  const admission = profile.admit(claims, config);
+  const admission = profile.admit(claims, provider, config.allowedUsers);
   if (!admission.ok) {
     return respond(
       403,
@@ -242,14 +315,19 @@ const completeLogin = async (config, request, cookies) => {
   }
 
   const exp = seconds() + config.sessionTtlSeconds;
-  const session = sign(config.sessionKey, { email: admission.email, idp: IDP, actor: "user", exp });
+  const session = sign(config.sessionKey, {
+    email: admission.email,
+    idp: txn.idp,
+    actor: "user",
+    exp,
+  });
 
   return redirect(safePath(txn.p), [
     cookie(SESSION_COOKIE, session, { maxAge: config.sessionTtlSeconds }),
     // Display-only, readable by the SPA, trusted by nothing. It exists so the
     // app can render who is signed in without a round trip; it carries no
     // authority, which is exactly why it is NOT HttpOnly and NOT signed.
-    cookie(IDENTITY_COOKIE, JSON.stringify({ email: admission.email, idp: IDP }), {
+    cookie(IDENTITY_COOKIE, JSON.stringify({ email: admission.email, idp: txn.idp }), {
       maxAge: config.sessionTtlSeconds,
       httpOnly: false,
     }),
@@ -259,17 +337,33 @@ const completeLogin = async (config, request, cookies) => {
   ]);
 };
 
-const logout = (config, host) => {
-  const post = encodeURIComponent(`https://${isAllowedHost(host, config) ? host : config.fqdn}/`);
-  return redirect(
-    `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/logout` +
-      `?post_logout_redirect_uri=${post}`,
-    [
-      cookie(SESSION_COOKIE, "", { maxAge: 0 }),
-      cookie(IDENTITY_COOKIE, "", { maxAge: 0, httpOnly: false }),
-      cookie(TXN_COOKIE, "", { maxAge: 0 }),
-    ],
-  );
+/**
+ * Sign out.
+ *
+ * Our cookies are cleared unconditionally and FIRST in intent: whether the
+ * provider round trip happens or not, the session here is over. Where the
+ * browser goes next depends on the provider the session was minted by —
+ * Entra ends its own session for us, Google deliberately does not (see
+ * `logoutUrl` in providers.mjs), so a Google session lands back on the site.
+ *
+ * The provider comes from the SIGNED session cookie. Reading it from the query
+ * string would let any caller pick the redirect target, which is an open
+ * redirect wearing a sign-out costume.
+ */
+const logout = (config, host, cookies) => {
+  const home = `https://${isAllowedHost(host, config) ? host : config.fqdn}/`;
+  const cleared = [
+    cookie(SESSION_COOKIE, "", { maxAge: 0 }),
+    cookie(IDENTITY_COOKIE, "", { maxAge: 0, httpOnly: false }),
+    cookie(TXN_COOKIE, "", { maxAge: 0 }),
+  ];
+
+  const session = verify(config.sessionKey, cookies[SESSION_COOKIE]);
+  const profile = session?.idp ? PROFILES[session.idp] : null;
+  const provider = session?.idp ? config.providers?.[session.idp] : null;
+  if (!profile?.logoutUrl || !provider) return redirect(home, cleared);
+
+  return redirect(profile.logoutUrl(provider, home), cleared);
 };
 
 // --- Entry point -------------------------------------------------------------
@@ -298,10 +392,11 @@ export const handler = async (event) => {
   const cookies = parseCookies(request.headers);
 
   if (uri.startsWith("/oauth2/")) {
-    if (uri === "/oauth2/logout") return logout(config, host);
+    if (uri === "/oauth2/logout") return logout(config, host, cookies);
     if (uri === "/oauth2/callback") return completeLogin(config, request, cookies);
     if (uri === "/oauth2/start") {
-      return startLogin(config, host, new URLSearchParams(request.querystring ?? "").get("next"));
+      const query = new URLSearchParams(request.querystring ?? "");
+      return startLogin(config, host, query.get("next"), query.get("idp"));
     }
     return respond(404, "Not Found", errorPage("Not found", "No such sign-in route."));
   }
@@ -332,10 +427,11 @@ export const handler = async (event) => {
     return injectIdentity(request, config, session);
   }
 
-  // Unauthenticated. With one provider there is nothing to choose between, so
-  // the redirect goes straight to the authorize URL (ADR-0010).
+  // Unauthenticated. The redirect always goes to `/oauth2/start`, which decides
+  // between going straight to a provider and rendering the chooser — that
+  // decision lives in exactly one place (ADR-0035).
   //
-  // An API call gets a 401 instead of a redirect: following a 302 to Microsoft
+  // An API call gets a 401 instead of a redirect: following a 302 to an IdP
   // from `fetch` produces an opaque CORS failure that tells the SPA nothing,
   // whereas a 401 is something it can act on.
   if (uri.startsWith("/api/")) {

@@ -68,7 +68,11 @@ typecheck: ## Typecheck every TypeScript workspace
 
 .PHONY: test
 test: ## Run unit tests
-	bun test packages
+	# Both paths, explicitly. `bun test packages` alone left the edge
+	# authenticator's suite — the security boundary — running only when someone
+	# thought to invoke it by hand, which is the same silent gap the typecheck
+	# target above was widened to close.
+	bun test packages infra/modules/edge/src/auth
 
 .PHONY: history
 history: ## Curate reference/*.xlsx into Parquet under reference/history/
@@ -182,6 +186,10 @@ github-environments: ## Create dev/test/prod GitHub Environments and their promo
 .PHONY: entra
 entra: ## Create or converge the EntraID app registration for OAuth
 	infra/entra/entra_app.sh
+
+.PHONY: google-oauth
+google-oauth: ## Seed the Google OAuth client secret (ENVS=dev,test,prod; default all) — after identity applies
+	infra/google/google_oauth.sh
 
 # ---------------------------------------------------------------------------
 # Local development

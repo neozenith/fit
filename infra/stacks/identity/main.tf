@@ -14,9 +14,11 @@ module "identity" {
   environment = var.environment
   fqdn        = local.env.fqdn
 
-  entra_tenant_id = local.config.entra_tenant_id
-  entra_client_id = local.env.entra_client_id
-  allowed_users   = local.env.allowed_users
+  entra_tenant_id  = local.config.entra_tenant_id
+  entra_client_id  = local.env.entra_client_id
+  google_client_id = local.config.google_client_id
+
+  allowed_users = local.env.allowed_users
 
   session_ttl_seconds = local.env.session_ttl_seconds
 }

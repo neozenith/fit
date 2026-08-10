@@ -913,6 +913,36 @@ button:disabled {
   min-width: 0;
 }
 
+/* What the slot is for, under the exercise it is currently filled with.
+   Small and quiet: it is the standing description of a requirement, not a
+   change you need to read every session. */
+.exercise-row__intent {
+  margin: calc(var(--s1) * -1) 0 var(--s2);
+  font-size: 0.85rem;
+}
+
+/* Reference, not instruction — collapsed by default, but present, because
+   `MR` and `MR10` are load-bearing notation the app otherwise never explains. */
+.glossary {
+  margin-top: var(--s4);
+}
+
+.glossary dl {
+  margin: var(--s2) 0 0;
+  display: grid;
+  gap: var(--s2);
+}
+
+.glossary dt {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.glossary dd {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
 .exercise-row__form {
   margin-top: var(--s3);
   padding-top: var(--s3);

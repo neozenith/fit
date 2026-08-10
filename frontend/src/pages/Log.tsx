@@ -1,7 +1,9 @@
 import {
   type BlockConfig,
+  GLOSSARY,
   type PrescribedExercise,
   type PrescribedSet,
+  ROLE_INTENT,
   requiredSets,
   type Session,
   sessionState,
@@ -271,6 +273,23 @@ export const LogPage = () => {
               />
             ))}
           </div>
+
+          {/* The sheet's own `Additional Information` block. It is collapsed
+              because it is reference rather than instruction — but it has to be
+              reachable, because every conditional rule in the program keys off
+              a set written `MR` or `MR10`, and those mean nothing to a reader
+              who has only ever seen the app. */}
+          <details className="glossary">
+            <summary className="muted">What the rep notations mean</summary>
+            <dl>
+              {GLOSSARY.map(({ term, meaning }) => (
+                <div key={term}>
+                  <dt>{term}</dt>
+                  <dd className="muted">{meaning}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
         </section>
       )}
     </>
@@ -322,6 +341,15 @@ const ExerciseSets = ({
           {prescribed > 0 ? ` / ${prescribed}` : ""} sets
         </span>
       </div>
+      {/* What the SLOT is for, which the exercise name alone does not say.
+          The spreadsheet labelled its accessory fields "Upper Back Exercise #1
+          (horizontal pull)"; the port kept the athlete's chosen lift and
+          dropped the requirement it was chosen to satisfy, leaving a bare name
+          with nothing on screen to judge a substitute against.
+
+          `exercise.note` wins where the program gave specific guidance for this
+          exercise; ROLE_INTENT is the standing description of the slot. */}
+      <p className="exercise-row__intent muted">{exercise.note ?? ROLE_INTENT[exercise.role]}</p>
 
       <div className="set-rows">
         {Array.from({ length: rows }, (_, index) => {

@@ -1,5 +1,6 @@
 import { GetParametersByPathCommand, SSMClient } from "@aws-sdk/client-ssm";
 import bundled from "./config.json" with { type: "json" };
+import { buildConfig, relativeKey } from "./params.mjs";
 
 /**
  * Runtime configuration for the edge authenticator.
@@ -14,6 +15,11 @@ import bundled from "./config.json" with { type: "json" };
  *   SSM carries everything secret or mutable. Read recursively at cold start
  *   from the environment's own prefix, so seeding a credential does not need a
  *   redeploy.
+ *
+ * The SHAPING of what is read lives in `params.mjs`, which is pure and testable;
+ * this file is only the I/O and the cache. Importing `config.json` is precisely
+ * what makes this file untestable, so nothing that can be decided without the
+ * network belongs here.
  */
 
 // Lambda@Edge runs in the region nearest the viewer, but the parameters live in
@@ -25,13 +31,12 @@ const ssm = new SSMClient({ region: bundled.ssmRegion });
 const PARAM_TTL_MS = 5 * 60 * 1000;
 let cache = null;
 
-const leaf = (name) => name.split("/").pop();
-
 /**
- * Read the environment's parameter prefix into a flat object.
+ * Read the environment's parameter prefix into a flat object keyed by relative
+ * path.
  *
  * Pagination is handled rather than assumed: the prefix is small today, but a
- * silently truncated page would drop the client secret and produce a 500 that
+ * silently truncated page would drop a client secret and produce a 500 that
  * looks like a seeding problem.
  */
 const readParameters = async () => {
@@ -47,43 +52,17 @@ const readParameters = async () => {
       }),
     );
     for (const p of page.Parameters ?? []) {
-      // Keyed by leaf name, with the full path kept for the error messages that
-      // tell an operator exactly which parameter to seed.
-      values[leaf(p.Name)] = p.Value;
-      values[`__path_${leaf(p.Name)}`] = p.Name;
+      values[relativeKey(p.Name, bundled.ssmPrefix)] = p.Value;
     }
     nextToken = page.NextToken;
   } while (nextToken);
   return values;
 };
 
-/** Sentinel values written by Terraform for parameters it must never own. */
-const UNSEEDED = new Set(["UNSEEDED", "PLACEHOLDER", ""]);
-
-export const isSeeded = (value) => value !== undefined && !UNSEEDED.has(value);
-
 export const loadConfig = async () => {
   if (cache && cache.expires > Date.now()) return cache.config;
 
-  const p = await readParameters();
-
-  const config = {
-    ...bundled,
-    tenantId: p.tenant_id,
-    clientId: p.client_id,
-    clientSecret: p.client_secret,
-    clientSecretPath: p.__path_client_secret,
-    sessionKey: p.session_hmac_key,
-    // An empty allow-list must admit NOBODY (ADR-0010). `filter(Boolean)` is
-    // what makes `"".split(",")` produce `[]` instead of `[""]` — without it an
-    // empty parameter would admit an empty email, which some IdP edge cases
-    // can actually produce.
-    allowedUsers: (p.allowed_users ?? "")
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean),
-    sessionTtlSeconds: Number(p.session_ttl_seconds ?? 28800),
-  };
+  const config = buildConfig(bundled, await readParameters());
 
   cache = { config, expires: Date.now() + PARAM_TTL_MS };
   return config;

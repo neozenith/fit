@@ -56,6 +56,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -66,8 +68,7 @@ log = logging.getLogger("strava")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CREDS = ROOT / "reference" / "strava.creds.txt"
-DEFAULT_CACHE = ROOT / "reference" / "strava" / "cache.sqlite"
-DEFAULT_PARQUET = ROOT / "reference" / "strava" / "activities.parquet"
+STRAVA_DIR = ROOT / "reference" / "strava"
 
 API = "https://www.strava.com/api/v3"
 TOKEN_URL = "https://www.strava.com/oauth/token"
@@ -111,44 +112,108 @@ class StravaError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Credentials — a key=value file that this tool both reads and rewrites, because
-# Strava ROTATES the refresh token on every refresh. Keeping the old one is the
+# Credentials — an INI-shaped file this tool both reads and REWRITES, because
+# Strava rotates the refresh token on every refresh; keeping the old one is the
 # same as having no credentials at all.
+#
+# One `[section]` per Strava app, because a Strava app belongs to exactly one
+# account and rate limits are counted per app. A flat file cannot hold two: the
+# same key appears twice, the second silently wins, and a write-back flattens
+# both into one — which is how a working grant gets destroyed by a refresh.
+# Editing is line-based rather than via configparser so comments survive.
 # ---------------------------------------------------------------------------
 
+REQUIRED_KEYS = frozenset({"client_id", "client_secret"})
 
-def read_creds(path: Path, *, require: frozenset[str] = frozenset()) -> dict[str, str]:
+
+def parse_creds(path: Path) -> tuple[str | None, dict[str, dict[str, str]]]:
+    """Return (default account name, {account: {key: value}})."""
     if not path.exists():
         raise StravaError(f"No credentials at {path}")
-    creds: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    preamble: dict[str, str] = {}
+    accounts: dict[str, dict[str, str]] = {}
+    current: dict[str, str] | None = None
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = accounts.setdefault(line[1:-1].strip(), {})
+            continue
+        if "=" not in line:
             continue
         key, _, value = line.partition("=")
-        creds[key.strip()] = value.strip()
+        (preamble if current is None else current)[key.strip()] = value.strip()
+    if not accounts:
+        raise StravaError(
+            f"{path} has no [account] sections. Wrap each Strava app's keys under a "
+            "header naming the account it belongs to, e.g. `[joshpeak05]`."
+        )
+    return preamble.get("default_account"), accounts
+
+
+def resolve_account(path: Path, requested: str | None) -> str:
+    default, accounts = parse_creds(path)
+    name = requested or default or (next(iter(accounts)) if len(accounts) == 1 else None)
+    if name is None:
+        raise StravaError(
+            f"{path} holds several accounts ({', '.join(accounts)}) and names no "
+            "`default_account=`. Pass --account."
+        )
+    if name not in accounts:
+        raise StravaError(f"No [{name}] in {path}. Known accounts: {', '.join(accounts)}")
+    return name
+
+
+def read_creds(
+    path: Path, account: str, *, require: frozenset[str] = frozenset()
+) -> dict[str, str]:
+    creds = parse_creds(path)[1][account]
     # client_id and client_secret identify the app and are always required.
     # refresh_token is only required once there IS a grant — `auth login` is the
     # command whose whole job is to create one, so it asks for less.
-    missing = ({"client_id", "client_secret"} | set(require)) - creds.keys()
+    missing = (REQUIRED_KEYS | set(require)) - creds.keys()
     if missing:
         raise StravaError(
-            f"{path} is missing: {', '.join(sorted(missing))}. "
-            "Every one of them is required to refresh an access token — add the "
-            "missing lines as `key=value`. client_id and client_secret are on "
-            "https://www.strava.com/settings/api"
+            f"[{account}] in {path} is missing: {', '.join(sorted(missing))}. "
+            "Add them as `key=value` under that header; client_id and client_secret "
+            "are at https://www.strava.com/settings/api"
         )
     return creds
 
 
-def write_creds(path: Path, creds: dict[str, str]) -> None:
-    """Rewrite the credential file, preserving its trailing comment block."""
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    comments = [ln for ln in existing.splitlines() if ln.strip().startswith("#")]
-    body = "\n".join(f"{k}={v}" for k, v in creds.items())
-    tail = ("\n\n" + "\n".join(comments)) if comments else ""
+def write_creds(path: Path, account: str, creds: dict[str, str]) -> None:
+    """Update one section in place, leaving every other line byte-identical.
+
+    Rewriting the whole file from parsed state would drop comments and, worse,
+    re-serialise the OTHER accounts from a partial read. Only the lines inside
+    the target section are touched.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start = next(
+        (i for i, ln in enumerate(lines) if ln.strip() == f"[{account}]"),
+        None,
+    )
+    if start is None:
+        raise StravaError(f"No [{account}] section to update in {path}")
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")),
+        len(lines),
+    )
+    remaining = dict(creds)
+    for i in range(start + 1, end):
+        key = lines[i].split("=", 1)[0].strip()
+        if key in remaining and not lines[i].strip().startswith("#"):
+            lines[i] = f"{key}={remaining.pop(key)}"
+    # Keys the section never had (`scope` on first login) go at its end, before
+    # whatever trailing blank lines separate it from the next section.
+    tail = end
+    while tail > start + 1 and not lines[tail - 1].strip():
+        tail -= 1
+    lines[tail:tail] = [f"{k}={v}" for k, v in remaining.items()]
+
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(body + tail + "\n", encoding="utf-8")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp.replace(path)  # atomic: a half-written credential file is unrecoverable
 
 
@@ -254,9 +319,10 @@ class Budget:
 
 
 class Client:
-    def __init__(self, creds_path: Path, budget: Budget) -> None:
+    def __init__(self, creds_path: Path, account: str, budget: Budget) -> None:
         self.creds_path = creds_path
-        self.creds = read_creds(creds_path, require=frozenset({"refresh_token"}))
+        self.account = account
+        self.creds = read_creds(creds_path, account, require=frozenset({"refresh_token"}))
         self.budget = budget
 
     def token(self) -> str:
@@ -287,7 +353,7 @@ class Client:
             .isoformat()
             .replace("+00:00", "Z")
         )
-        write_creds(self.creds_path, self.creds)
+        write_creds(self.creds_path, self.account, self.creds)
         log.info("token refreshed, valid until %s", self.creds["expires_at"])
         return self.creds["access_token"]
 
@@ -317,12 +383,9 @@ class BudgetExhausted(Exception):
 # ---------------------------------------------------------------------------
 
 
-def authorize(creds_path: Path, *, port: int) -> dict[str, str]:
+def authorize(creds_path: Path, account: str, *, port: int) -> dict[str, str]:
     """Run the OAuth code exchange against a one-shot loopback listener."""
-    import http.server
-    import webbrowser
-
-    creds = read_creds(creds_path)
+    creds = read_creds(creds_path, account)
     redirect_uri = f"http://{CALLBACK_HOST}:{port}/callback"
     url = f"{AUTHORIZE_URL}?" + urllib.parse.urlencode(
         {
@@ -337,7 +400,7 @@ def authorize(creds_path: Path, *, port: int) -> dict[str, str]:
     )
     captured: dict[str, str] = {}
 
-    class Handler(http.server.BaseHTTPRequestHandler):
+    class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 — stdlib's naming, not ours
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             captured.update({k: v[0] for k, v in query.items()})
@@ -354,7 +417,7 @@ def authorize(creds_path: Path, *, port: int) -> dict[str, str]:
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             pass  # the CLI does the reporting
 
-    server = http.server.HTTPServer((CALLBACK_HOST, port), Handler)
+    server = HTTPServer((CALLBACK_HOST, port), Handler)
     print(f"Opening a browser to authorize scopes: {SCOPES}")
     print(f"If it does not open, visit:\n\n  {url}\n")
     webbrowser.open(url)
@@ -393,7 +456,7 @@ def authorize(creds_path: Path, *, port: int) -> dict[str, str]:
         datetime.fromtimestamp(int(payload["expires_at"]), UTC).isoformat().replace("+00:00", "Z")
     )
     creds["scope"] = captured.get("scope", SCOPES)
-    write_creds(creds_path, creds)
+    write_creds(creds_path, account, creds)
     return creds
 
 
@@ -625,7 +688,23 @@ def export(conn: sqlite3.Connection, out: Path) -> pl.DataFrame:
         records.append(record)
     if not records:
         raise StravaError("Nothing cached yet — run `make strava-pull` first")
-    frame = pl.DataFrame(records)
+    # Declared, not inferred. Polars infers from the first 100 rows, and a column
+    # that is null across all of them (`average_watts` for a decade of runs) is
+    # typed Null — then the first real value further down fails to append. The
+    # column list is already explicit above; the types have to be too.
+    schema = {
+        "activity_id": pl.Int64,
+        "started_at": pl.Datetime,
+        "date": pl.Date,
+        "start_date_local": pl.Utf8,
+        "name": pl.Utf8,
+        "activity_type": pl.Utf8,
+        "has_detail": pl.Boolean,
+        **{key: pl.Float64 for key in NUMERIC},
+        **{key: pl.Boolean for key in BOOLEAN},
+        **{key: pl.Utf8 for key in TEXT},
+    }
+    frame = pl.DataFrame(records, schema=schema)
     out.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(out)
     return frame
@@ -644,10 +723,12 @@ def _counts(conn: sqlite3.Connection) -> tuple[int, int]:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    conn = open_cache(args.cache)
+    account = resolve_account(args.creds, args.account)
+    conn = open_cache(cache_path(args, account))
     total, detailed = _counts(conn)
     backfill = "complete" if meta_get(conn, "backfill_complete") == "1" else "in progress"
-    print(f"cache             {args.cache}")
+    print(f"account           {account}")
+    print(f"cache             {cache_path(args, account)}")
     print(f"activities        {total} indexed, {detailed} detailed, {total - detailed} pending")
     print(f"index backfill    {backfill}")
     if total:
@@ -657,7 +738,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             "SELECT activity_type, COUNT(*) n FROM activity GROUP BY 1 ORDER BY n DESC LIMIT 8"
         ).fetchall()
         print("types             " + ", ".join(f"{r['activity_type']} {r['n']}" for r in by_type))
-    creds = read_creds(args.creds)
+    creds = read_creds(args.creds, account)
     expiry = _expiry(creds)
     live = expiry is not None and expiry - TOKEN_SKEW > datetime.now(UTC)
     state = f"valid until {expiry.isoformat()}" if live and expiry else "stale, will refresh"
@@ -668,26 +749,38 @@ def cmd_status(args: argparse.Namespace) -> None:
     else:
         ok = "activity:read_all" in scope.split(",")
         print(f"scope             {scope}{'' if ok else '  ** missing activity:read_all **'}")
-    if total - detailed:
-        batches = -(-(total - detailed) // 95)  # ceil, at ~95 usable reads per window
-        print(f"\n{total - detailed} details left: about {batches} batch(es), 15 minutes apart.")
+    pending = total - detailed
+    if pending:
+        # Estimated from the limit Strava last reported, not a constant: the
+        # per-app tier can be raised, and a hardcoded figure would quietly
+        # keep quoting the old one.
+        per_window = int(meta_get(conn, "read_limit_15min") or 0)
+        if per_window:
+            batches = -(-pending // max(1, per_window - DEFAULT_RESERVE_15MIN))
+            print(f"\n{pending} details left: about {batches} batch(es) of "
+                  f"{per_window - DEFAULT_RESERVE_15MIN}, 15 minutes apart.")
+        else:
+            print(f"\n{pending} details left; run `pull` to learn the rate limit tier.")
 
 
 def cmd_auth_login(args: argparse.Namespace) -> None:
-    creds = authorize(args.creds, port=args.port)
-    print(f"authorized; scope={creds['scope']} expires_at={creds['expires_at']}")
+    account = resolve_account(args.creds, args.account)
+    creds = authorize(args.creds, account, port=args.port)
+    print(f"[{account}] authorized; scope={creds['scope']} expires_at={creds['expires_at']}")
 
 
 def cmd_auth_refresh(args: argparse.Namespace) -> None:
-    client = Client(args.creds, Budget(0, 0))
+    account = resolve_account(args.creds, args.account)
+    client = Client(args.creds, account, Budget(0, 0))
     client.refresh()
-    print(f"refreshed; expires_at={client.creds['expires_at']}")
+    print(f"[{account}] refreshed; expires_at={client.creds['expires_at']}")
 
 
 def cmd_pull(args: argparse.Namespace) -> None:
-    conn = open_cache(args.cache)
+    account = resolve_account(args.creds, args.account)
+    conn = open_cache(cache_path(args, account))
     budget = Budget(args.reserve, args.reserve_daily)
-    client = Client(args.creds, budget)
+    client = Client(args.creds, account, budget)
     before_total, before_detailed = _counts(conn)
     stopped = None
     try:
@@ -697,6 +790,11 @@ def cmd_pull(args: argparse.Namespace) -> None:
             sync_details(conn, client, limit=args.limit)
     except BudgetExhausted as exc:
         stopped = str(exc)
+    if budget.limit_15:
+        # Remembered so `status` can estimate remaining batches without spending
+        # a request to rediscover the tier.
+        meta_set(conn, "read_limit_15min", str(budget.limit_15))
+        conn.commit()
     total, detailed = _counts(conn)
     print(
         f"indexed +{total - before_total} (total {total}), "
@@ -711,12 +809,19 @@ def cmd_pull(args: argparse.Namespace) -> None:
 
 
 def cmd_export(args: argparse.Namespace) -> None:
-    conn = open_cache(args.cache)
-    frame = export(conn, args.out)
+    account = resolve_account(args.creds, args.account)
+    conn = open_cache(cache_path(args, account))
+    out = args.out or STRAVA_DIR / f"{account}-activities.parquet"
+    frame = export(conn, out)
     partial = int(frame.filter(~pl.col("has_detail")).height)
-    print(f"wrote {args.out} — {frame.height} activities, {len(frame.columns)} columns")
+    print(f"wrote {out} — {frame.height} activities, {len(frame.columns)} columns")
     if partial:
         print(f"note: {partial} row(s) are summary-only (no detail fetched yet)")
+
+
+def cache_path(args: argparse.Namespace, account: str) -> Path:
+    """One cache per account — two athletes' archives must never share a file."""
+    return args.cache or STRAVA_DIR / f"{account}.sqlite"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -730,7 +835,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog="strava",
         description="Resumable, rate-limit-aware extract of the full Strava activity history.",
     )
-    parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    parser.add_argument(
+        "--account", default=None, help="Which [section] of the creds file to use"
+    )
+    parser.add_argument(
+        "--cache", type=Path, default=None, help="Override the per-account cache path"
+    )
     parser.add_argument("--creds", type=Path, default=DEFAULT_CREDS)
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.set_defaults(func=_help(parser))
@@ -758,7 +868,7 @@ def build_parser() -> argparse.ArgumentParser:
     pull.set_defaults(func=cmd_pull)
 
     exp = sub.add_parser("export", help="Write the cache to Parquet")
-    exp.add_argument("--out", type=Path, default=DEFAULT_PARQUET)
+    exp.add_argument("--out", type=Path, default=None)
     exp.set_defaults(func=cmd_export)
 
     return parser

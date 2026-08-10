@@ -19,7 +19,7 @@ Status values: `Accepted`, `Superseded by ADR-NNNN`, `Proposed`.
 | [0007](#adr-0007--git-event-selects-the-environment-draft--plan-pr--dev-main--test-tag--prod) | Git event selects the environment | Accepted |
 | [0008](#adr-0008--stacks-are-sized-by-blast-radius-and-change-cadence) | Stacks are sized by blast radius and change cadence | Accepted |
 | [0009](#adr-0009--authentication-terminates-at-lambdaedge-never-in-the-application) | Authentication terminates at Lambda@Edge, never in the application | Accepted |
-| [0010](#adr-0010--entraid-is-the-only-identity-provider) | EntraID is the only identity provider | Accepted |
+| [0010](#adr-0010--entraid-is-the-only-identity-provider) | EntraID is the only identity provider | Superseded by 0035 |
 | [0011](#adr-0011--the-session-hmac-key-is-the-agentic-test-key) | The session HMAC key is the agentic test key | Accepted |
 | [0012](#adr-0012--hot-data-lives-in-dynamodb-cold-data-becomes-parquet-on-s3) | Hot data lives in DynamoDB, cold data becomes Parquet on S3 | Accepted |
 | [0013](#adr-0013--observations-are-append-only-and-never-rewritten-by-the-program) | Observations are append-only and never rewritten by the program | Accepted |
@@ -299,7 +299,8 @@ IdP dependency. Its entire auth surface is "verify one HMAC".
 
 ## ADR-0010 — EntraID is the only identity provider
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0035](#adr-0035--two-identity-providers-one-allow-list).
+The admission rule below still holds; only its "one provider" premise changed.
 
 **Context.** The prior art supports a pluggable provider map with a chooser page
 for multiple IdPs. The operator here has exactly one tenant
@@ -1148,3 +1149,56 @@ this replaced.
 
 > **Lens.** When a value is consulted from three places, it has three
 > definitions. Make it data with one home before adding a fourth reader.
+
+---
+
+## ADR-0035 — Two identity providers, one allow-list
+
+**Status:** Accepted
+
+**Context.** [ADR-0010](#adr-0010--entraid-is-the-only-identity-provider) chose
+EntraID alone and deliberately left `PROFILES` as the seam for a second. The
+seam is now needed: the operator's day-to-day account is a Google identity, and
+signing in through a work directory to log a set of squats is friction on the
+one path the application has.
+
+**Decision.** EntraID **and** Google, both OIDC authorization-code with PKCE.
+Three rules make the pair safe:
+
+1. **The provider comes from the signed transaction, never the request.**
+   One callback URL serves both, and it uses the provider `/oauth2/start` chose.
+   A callback that could name its own provider would let a code minted by one
+   IdP be redeemed at the other's token endpoint under the other's secret.
+2. **Each provider keeps a provider-specific check.** Entra's is `tid`; Google's
+   is `email_verified`. Google's is not a formality — a Workspace administrator
+   can put any address in the `email` claim, and only `email_verified` says
+   Google vouches for it.
+3. **One allow-list across both.** An address is admitted whoever vouches for
+   it. Two lists would mean two places to revoke, and the second one gets
+   forgotten.
+
+Availability is **derived from what is seeded**, not declared. An environment
+whose Google secret is still `UNSEEDED` offers Entra alone and skips the chooser
+entirely — so ADR-0010's behaviour is what an un-migrated environment still
+does, rather than something to preserve by hand.
+
+**Consequences.** A chooser page exists after all, but only on the
+more-than-one-provider path. Logout became provider-dependent: Entra ends its
+own session, Google offers no scoped equivalent (its endpoints are account-wide
+or revoke consent), so a Google sign-out clears our cookies and relies on
+`prompt=select_account` to allow an account switch.
+
+The parameter reader had to change shape. Keying SSM results by leaf name
+collapses `auth/entra/client_id` and `auth/google/client_id` onto one key, with
+the last page of the recursive read winning — Google sign-in attempted with the
+Entra client id, silently. Parameters are now keyed by path relative to the
+prefix, and the shaping moved into `params.mjs` so it is testable at all;
+`config.mjs` imports the Terraform-synthesized `config.json`, which does not
+exist in the source tree.
+
+> **Lens.** Provider identity travels inside the signed transaction. Anything
+> that reads it from a query string is a confused-deputy bug, not a convenience.
+
+> **Lens.** A provider is offered when its secret is seeded, never because it is
+> listed. A configured-but-unseeded provider is a hidden provider, not a broken
+> button.

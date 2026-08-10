@@ -56,6 +56,10 @@ data "archive_file" "auth" {
     filename = "config.mjs"
   }
   source {
+    content  = file("${local.auth_source_dir}/params.mjs")
+    filename = "params.mjs"
+  }
+  source {
     content  = jsonencode(local.edge_config)
     filename = "config.json"
   }

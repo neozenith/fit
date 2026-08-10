@@ -27,7 +27,9 @@ the real gate, and it must show only what you intended.
 
 ```
 bootstrap/     CloudFormation. The ONE layer a human runs.
-entra/         The OAuth app registration. Different cloud, different identity.
+entra/         The EntraID app registration. Different cloud, different identity.
+google/        Seeds the Google OAuth secret. Same reason, less automation —
+               gcloud cannot create a web client, so the console does that part.
 modules/       identity · data · api · edge · archive · finops
 stacks/        one directory per stack, each with backends/{env}.config
 ```
@@ -116,18 +118,18 @@ parameter seeded out of band.
 
 ## Bootstrap ordering, and the one way to get it wrong
 
-`make entra` **must run after** the `identity` stack has applied for an
-environment, not before.
+`make entra` and `make google-oauth` **must run after** the `identity` stack has
+applied for an environment, not before.
 
-The identity stack creates `/fit/{env}/auth/entra/client_secret` as a shell
-holding `UNSEEDED` and then ignores changes to its value; `entra_app.sh`
-overwrites that value and nothing else. Run in the other order, the script
+The identity stack creates `/fit/{env}/auth/{idp}/client_secret` as a shell
+holding `UNSEEDED` and then ignores changes to its value; the seeding scripts
+overwrite that value and nothing else. Run in the other order, the script
 creates the parameter and the identity stack's next apply dies with
 `ParameterAlreadyExists` — permanently, because Terraform will not adopt a
 resource it did not create. Recovering means a state import or deleting the
 parameter.
 
-The script now refuses to create a parameter and names the fix instead. The
+Both scripts now refuse to create a parameter and name the fix instead. The
 correct sequence for a fresh environment is:
 
 ```sh
@@ -135,7 +137,13 @@ make bootstrap                 # once per account/app
 make github-environments       # once per repo
 make cold-start ENV=dev        # identity -> data -> api -> edge -> archive -> frontend
 make entra                     # AFTER identity exists; re-run seeds all three envs
+make google-oauth              # ditto, from reference/gcloud-oauth.txt
 ```
+
+An environment whose Google secret is still `UNSEEDED` is not broken — the edge
+derives which providers to offer from what is seeded, so it shows Entra alone
+and skips the chooser (ADR-0035). A missing seed is a **hidden provider**, never
+a button that fails at the token exchange.
 - **An Athena workgroup cannot be deleted while it holds query history.** The
   removal in ADR-0025 planned cleanly and then failed at apply with
   `InvalidRequestException: WorkGroup fit-finops is not empty` — 84 past query

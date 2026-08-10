@@ -16,3 +16,8 @@ output "client_secret_parameter_name" {
   description = "Seed this out of band. Named in the edge's 500 response while unseeded."
   value       = aws_ssm_parameter.entra_client_secret.name
 }
+
+output "google_client_secret_parameter_name" {
+  description = "Seed this out of band. Until it is, the edge does not offer Google at all."
+  value       = aws_ssm_parameter.google_client_secret.name
+}

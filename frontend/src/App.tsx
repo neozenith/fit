@@ -9,6 +9,7 @@ import { HistoryOverviewPage } from "./pages/history/Overview.jsx";
 import { HistoryRepMaxesPage } from "./pages/history/RepMaxes.jsx";
 import { HistoryVolumePage } from "./pages/history/Volume.jsx";
 import { LogPage } from "./pages/Log.jsx";
+import { LogAnythingPage } from "./pages/LogAnything.jsx";
 import { MeasurementsPage } from "./pages/Measurements.jsx";
 import { OverviewPage } from "./pages/Overview.jsx";
 import { ProgressPage } from "./pages/Progress.jsx";
@@ -75,6 +76,15 @@ const ROUTES: Route[] = [
     icon: "\u{1F4DD}",
     section: "Train",
     render: () => <LogPage />,
+  },
+  {
+    // Training that belongs to no block. A block is six weeks; the rest of the
+    // year is not, and before this there was nowhere for it to go.
+    path: "/log-anything",
+    label: "Log anything",
+    icon: "\u{270D}\u{FE0F}",
+    section: "Train",
+    render: () => <LogAnythingPage />,
   },
 
   {

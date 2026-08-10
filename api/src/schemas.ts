@@ -1,4 +1,3 @@
-import { EQUIPMENT, MOVEMENTS } from "@fit/program";
 import { z } from "zod";
 
 /**
@@ -204,13 +203,22 @@ export const historyWindowSchema = z.object(historyWindowShape);
  * screen, so a partial update would add a merge step that could disagree with
  * what the editor was looking at.
  *
- * `equipment` and `movement` are enums drawn from the program package, so the
- * two axes cannot drift between the client, the API and the seed data.
+ * `equipment` and `movement` are BOUNDED STRINGS, not enums.
+ *
+ * They used to be `z.enum` over the program package's constants, which is what
+ * made the two axes un-extendable without a deploy. They are vocabularies now
+ * (see vocabulary.ts), so the schema's job here is length and shape only.
+ *
+ * That is a real loosening and worth naming: a typo'd movement is no longer
+ * rejected at the boundary. It is caught where it matters instead — the
+ * catalogue UI picks from the stored vocabulary rather than free-typing, and a
+ * movement no slot can satisfy shows up as an empty picker with a warning
+ * rather than as a 400 nobody sees.
  */
 export const catalogueEntrySchema = z.object({
   exercise: z.string().trim().min(1).max(120),
-  equipment: z.enum(EQUIPMENT),
-  movement: z.enum(MOVEMENTS),
+  equipment: z.string().trim().min(1).max(40),
+  movement: z.string().trim().min(1).max(40),
   unilateral: z.boolean().optional(),
   isometric: z.boolean().optional(),
   bodyweightLoaded: z.boolean().optional(),
@@ -228,4 +236,18 @@ export const catalogueEntrySchema = z.object({
  */
 export const blockStateSchema = z.object({
   action: z.enum(["delete", "restore", "reset"]),
+});
+
+/**
+ * One vocabulary word.
+ *
+ * The key is what catalogue entries and `SLOT_MOVEMENT` reference, so it is
+ * immutable by construction: a relabel keeps the key and only the display text
+ * moves. Retiring is how a word is removed, because storage is append-only
+ * (ADR-0013) and every historical entry that used the word still has to read.
+ */
+export const vocabularyWordSchema = z.object({
+  key: z.string().trim().min(1).max(40),
+  label: z.string().trim().min(1).max(60),
+  retired: z.boolean().optional(),
 });

@@ -3,8 +3,7 @@ import {
   type BlockConfig,
   DEFAULT_ACCESSORIES,
   generateBlock,
-  MOVEMENT_LABEL,
-  type Movement,
+  movementLabel,
   type Session,
   SLOT_MOVEMENT,
 } from "@fit/program";
@@ -295,7 +294,7 @@ export const BlockInputsPage = () => {
                   <>
                     {slot.label}{" "}
                     <span className="muted">
-                      — {movement ? MOVEMENT_LABEL[movement as Movement] : "any movement"}
+                      — {movement ? movementLabel(movement) : "any movement"}
                     </span>
                   </>
                 }

@@ -65,6 +65,24 @@ export interface CuratedExercise {
   curated?: boolean;
 }
 
+/**
+ * A word in one of the two classification vocabularies.
+ *
+ * `key` is the stable identifier catalogue entries and `SLOT_MOVEMENT` store;
+ * `label` is only what gets displayed, so relabelling can never orphan a slot.
+ */
+export interface VocabularyWord {
+  key: string;
+  label: string;
+  retired?: boolean;
+  curated?: boolean;
+  /** A prescribed accessory slot needs this movement, so it cannot be retired. */
+  inUseBySlot?: boolean;
+}
+
+export type VocabularyAxis = "equipment" | "movement";
+export type Vocabularies = Record<VocabularyAxis, VocabularyWord[]>;
+
 export interface BlockSummary {
   block: BlockConfig;
   progress: BlockProgress;
@@ -144,6 +162,14 @@ export const api = {
     request<{ exercise: CuratedExercise }>("/api/catalogue", {
       method: "PUT",
       body: JSON.stringify(entry),
+    }),
+
+  vocabulary: () => request<Vocabularies>("/api/vocabulary"),
+
+  putVocabulary: (axis: VocabularyAxis, word: VocabularyWord) =>
+    request<{ word: VocabularyWord }>(`/api/vocabulary/${axis}`, {
+      method: "PUT",
+      body: JSON.stringify(word),
     }),
 
   sessions: (blockId: string, week6?: string) =>

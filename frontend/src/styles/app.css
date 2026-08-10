@@ -913,6 +913,73 @@ button:disabled {
   min-width: 0;
 }
 
+/* --- Catalogue curation ---------------------------------------------------- */
+
+/* Name grows, the two selects and the button take what they need. `wrap` rather
+   than a media query: this row is inside a card whose width depends on the
+   sidebar, so the breakpoint that matters is the container's, not the page's. */
+.add-exercise {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--s3);
+}
+
+.add-exercise label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  min-width: 0;
+}
+
+.add-exercise label:first-child {
+  flex: 1 1 14rem;
+}
+
+.vocabulary summary {
+  cursor: pointer;
+}
+
+/* `summary` is `display: list-item`; an `h2` inside it would otherwise break to
+   its own line and leave the disclosure triangle stranded above it. */
+.vocabulary summary h2 {
+  display: inline;
+  margin: 0;
+}
+
+.vocabulary__list {
+  list-style: none;
+  margin: var(--s3) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.vocabulary__list li {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+}
+
+/* Struck through, not hidden: a retired word still classifies real history, and
+   the point of the row is that you can restore it. */
+.vocabulary__list li.is-retired span:first-child {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.add-word {
+  display: flex;
+  gap: var(--s2);
+}
+
+.add-word input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 /* What the slot is for, under the exercise it is currently filled with.
    Small and quiet: it is the standing description of a requirement, not a
    change you need to read every session. */

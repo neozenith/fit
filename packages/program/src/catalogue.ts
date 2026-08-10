@@ -15,51 +15,62 @@
  * stale the moment a movement is learned.
  */
 
-export const MOVEMENTS = [
-  "squat",
-  "hinge",
-  "lunge",
-  "horizontal-push",
-  "vertical-push",
-  "horizontal-pull",
-  "vertical-pull",
-  "olympic",
-  "core",
-  "carry",
-  "conditioning",
-  "other",
-] as const;
+/**
+ * Both axes are VOCABULARIES, not enums.
+ *
+ * They were closed `as const` unions, which meant adding a kind of equipment was
+ * a code change and a deploy. That is the wrong shape for this data: the
+ * catalogue's own Lens (ADR-0034) says a value consulted from several places
+ * should have one home as data, and equipment is exactly that — "Band" was
+ * missing, so every banded movement was filed under `Machine`, which is not
+ * what a banded lat pulldown is by any reading.
+ *
+ * What lives here is the SEED. The stored vocabulary starts from it and
+ * diverges; nothing in this package reads a vocabulary to make a decision, so
+ * a value it has never heard of is not an error.
+ */
 
-export type Movement = (typeof MOVEMENTS)[number];
+export type Movement = string;
+export type Equipment = string;
 
-export const MOVEMENT_LABEL: Record<Movement, string> = {
-  squat: "Squat",
-  hinge: "Hinge",
-  lunge: "Lunge",
-  "horizontal-push": "Horizontal push",
-  "vertical-push": "Vertical push",
-  "horizontal-pull": "Horizontal pull",
-  "vertical-pull": "Vertical pull",
-  olympic: "Olympic",
-  core: "Core",
-  carry: "Carry",
-  conditioning: "Conditioning",
-  other: "Other",
-};
+/**
+ * Movement keys are SLUGS and the label is separate, because `SLOT_MOVEMENT`
+ * references a key. Renaming "Horizontal pull" to "Horizontal pulling" must not
+ * silently empty the accessory slot that asks for it.
+ */
+export const SEED_MOVEMENTS: readonly { key: string; label: string }[] = [
+  { key: "squat", label: "Squat" },
+  { key: "hinge", label: "Hinge" },
+  { key: "lunge", label: "Lunge" },
+  { key: "horizontal-push", label: "Horizontal push" },
+  { key: "vertical-push", label: "Vertical push" },
+  { key: "horizontal-pull", label: "Horizontal pull" },
+  { key: "vertical-pull", label: "Vertical pull" },
+  { key: "olympic", label: "Olympic" },
+  { key: "core", label: "Core" },
+  { key: "carry", label: "Carry" },
+  { key: "conditioning", label: "Conditioning" },
+  { key: "other", label: "Other" },
+];
 
-export const EQUIPMENT = [
+export const SEED_EQUIPMENT: readonly string[] = [
   "Barbell",
   "Dumbbell",
   "Kettlebell",
   "Cable",
+  "Band",
   "Landmine",
   "Plate",
   "Machine",
   "Bodyweight",
   "Other",
-] as const;
+];
 
-export type Equipment = (typeof EQUIPMENT)[number];
+/** Fallback label for a movement key with no entry — never silently blank. */
+export const movementLabel = (
+  key: string,
+  vocabulary: readonly { key: string; label: string }[] = SEED_MOVEMENTS,
+): string => vocabulary.find((m) => m.key === key)?.label ?? key;
 
 /**
  * Every optional field is `| undefined`, not a bare `?`.
@@ -251,7 +262,10 @@ export const SEED_CATALOGUE: CatalogueEntry[] = [
     bodyweightLoaded: true,
   },
   { exercise: "Lat Pulldown", equipment: "Machine", movement: "vertical-pull" },
-  { exercise: "Banded Lat Pulldown", equipment: "Machine", movement: "vertical-pull" },
+  // A band, not a machine. It was filed under Machine only because the seed
+  // vocabulary had no "Band" in it — the closed enum did not just omit a value,
+  // it silently mis-classified every movement that needed one.
+  { exercise: "Banded Lat Pulldown", equipment: "Band", movement: "vertical-pull" },
   { exercise: "Stiff Legged Deadlift", equipment: "Barbell", movement: "hinge" },
   { exercise: "Snatch Grip Deadlift", equipment: "Barbell", movement: "hinge" },
   { exercise: "Deficit Deadlift", equipment: "Barbell", movement: "hinge" },
@@ -290,3 +304,18 @@ export const SLOT_MOVEMENT: Record<string, Movement | null> = {
   optionalLower1: null,
   optionalLower2: null,
 };
+
+/**
+ * Movement keys a prescribed slot depends on.
+ *
+ * Deleting one of these is what turns an accessory picker into an empty list —
+ * the slot asks for a movement nothing is classified as any more, and the
+ * failure is silent because an empty picker looks like a filtering choice. The
+ * API refuses the delete instead, and the UI marks these as in use.
+ *
+ * Derived from `SLOT_MOVEMENT` rather than listed, so a slot added later is
+ * protected without anyone remembering to update a second list.
+ */
+export const SLOT_REQUIRED_MOVEMENTS: readonly string[] = [
+  ...new Set(Object.values(SLOT_MOVEMENT).filter((m): m is string => m !== null)),
+];

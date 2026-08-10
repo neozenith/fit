@@ -13,9 +13,39 @@ import { b64urlDecode } from "./crypto.mjs";
  * resolved to whichever provider happened to load last.
  */
 
+/**
+ * Provider marks, inline.
+ *
+ * INLINE SVG IS NOT A STYLE CHOICE. The chooser is served by the edge function
+ * before the SPA exists — on a cold environment the S3 origin may hold nothing
+ * at all — so an `<img src>` or an icon font would render as a broken box on
+ * exactly the page whose job is to look trustworthy enough to click.
+ *
+ * Both are the vendors' own marks at their official colours, which is a brand
+ * requirement of theirs and not decoration: a recoloured Google "G" is a
+ * violation of Google's sign-in branding rules.
+ */
+const ICONS = {
+  google:
+    `<svg width="18" height="18" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">` +
+    `<path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>` +
+    `<path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>` +
+    `<path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>` +
+    `<path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/></svg>`,
+  entra:
+    `<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">` +
+    `<path d="m3.802 14.032c.388.242 1.033.511 1.715.511.621 0 1.198-.18 1.676-.487l1.807-1.129v4.073c-.286 0-.574-.078-.824-.234l-4.374-2.734Z" fill="#225086"/>` +
+    `<path d="m7.853 1.507.353 8.46c-.579.654-.428 1.642.323 2.111 0 0 2.776 1.735 3.126 1.954.388.242 1.033.511 1.715.511.621 0 1.198-.18 1.676-.487l1.807-1.129-4.364-2.728 4.365-4.924V1c-.424 0-.847.169-1.147.507Z" fill="#66ddff"/>` +
+    `<polygon points="4.636 10.199 4.688 10.231 9 12.927 9.001 5.276 9 5.275" fill="#cbf8ff"/>` +
+    `<path d="m17.324 12.078c.751-.469.902-1.457.323-2.111l-4.921-5.551c-.397-.185-.842-.291-1.313-.291-.925 0-1.752.399-2.302 1.026l-.109.123 4.364 4.924-4.365 2.728v4.073c.287 0 .573-.078.823-.234l7.5-4.688Z" fill="#074793"/>` +
+    `<path d="m9.001 1v4.275l.109-.123c.55-.627 1.377-1.026 2.302-1.026.472 0 .916.107 1.313.291l-2.579-2.909c-.299-.338-.723-.507-1.146-.507Z" fill="#0294e4"/>` +
+    `<polygon points="13.365 10.199 9.001 5.276 9.001 12.926" fill="#96bcc2"/></svg>`,
+};
+
 export const PROFILES = {
   entra: {
     label: "Microsoft",
+    icon: ICONS.entra,
     /**
      * A provider is offered only when its own credentials are present. The
      * tenant id is the discriminator that cannot be defaulted — an EntraID
@@ -74,6 +104,7 @@ export const PROFILES = {
 
   google: {
     label: "Google",
+    icon: ICONS.google,
     configured: (p) => Boolean(p.clientId),
 
     authorizeUrl: () => "https://accounts.google.com/o/oauth2/v2/auth",

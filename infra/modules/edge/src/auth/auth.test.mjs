@@ -454,19 +454,44 @@ describe("provider endpoints", () => {
 });
 
 describe("the chooser page", () => {
+  const render = () =>
+    chooserPage(
+      ["entra", "google"].map((idp) => ({
+        idp,
+        label: PROFILES[idp].label,
+        icon: PROFILES[idp].icon,
+        href: `/oauth2/start?idp=${idp}&next=%2F`,
+      })),
+    );
+
   test("one link per available provider", () => {
-    const html = chooserPage([
-      { idp: "entra", label: "Microsoft", href: "/oauth2/start?idp=entra&next=%2F" },
-      { idp: "google", label: "Google", href: "/oauth2/start?idp=google&next=%2F" },
-    ]);
+    const html = render();
     expect(html).toContain("Continue with Microsoft");
     expect(html).toContain("Continue with Google");
     expect(html).toContain("idp=google");
   });
 
-  test("labels come from PROFILES, so there is no caller-controlled text", () => {
-    const html = chooserPage([{ idp: "google", label: PROFILES.google.label, href: "/x" }]);
-    expect(html).not.toContain("<script");
+  test("every provider ships an icon and it reaches the page", () => {
+    // A profile added without an icon renders `undefined` into the markup,
+    // which is a silent visual break rather than a failure.
+    for (const idp of Object.keys(PROFILES)) {
+      expect(PROFILES[idp].icon).toMatch(/^<svg /);
+    }
+    expect(render()).not.toContain("undefined");
+  });
+
+  test("nothing on the page loads over the network", () => {
+    // The whole reason the icons and the mark are inline: this page renders
+    // before the SPA exists, and on a cold environment before the origin has
+    // anything to serve. One <img> or <link> and it is a broken sign-in screen.
+    const html = render();
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<link");
+    expect(html).not.toMatch(/https?:\/\/(?!www\.w3\.org)/);
+  });
+
+  test("markup comes from PROFILES, so there is no caller-controlled text", () => {
+    expect(render()).not.toContain("<script");
   });
 });
 

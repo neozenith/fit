@@ -169,6 +169,7 @@ const startLogin = async (config, host, next, requested) => {
         available.map((k) => ({
           idp: k,
           label: PROFILES[k].label,
+          icon: PROFILES[k].icon,
           href: `/oauth2/start?idp=${k}&next=${encodeURIComponent(safePath(next))}`,
         })),
       ),

@@ -134,18 +134,67 @@ export const respond = (status, statusDescription, body, headers = {}) => ({
  * all. `reason` is operator-facing text and never echoes anything the caller
  * supplied.
  */
+/**
+ * The `fit` mark, inline.
+ *
+ * A COPY, and deliberately so. The canonical asset is
+ * `frontend/public/brand/fit-mark-themed.svg`, which cannot be referenced here
+ * for two independent reasons: an `<img src="/brand/…">` is a second request to
+ * this same distribution, which arrives with no session and is redirected
+ * straight back to this page — a broken image on the sign-in screen — and on a
+ * cold environment the SPA bucket may hold nothing at all.
+ *
+ * The source file carries its palette as `:root` custom properties under a
+ * `prefers-color-scheme` query. Inlining that verbatim would redefine `:root`
+ * for the whole page, so the dark values are resolved into the paths here and
+ * the `<style>` block dropped. These edge pages are dark-only regardless.
+ */
+const MARK =
+  `<svg viewBox="0 0 512 512" width="56" height="56" role="img" aria-label="fit">` +
+  `<rect width="512" height="512" rx="96" fill="#101010"/>` +
+  `<g fill="#3a2a63"><path d="M-8 402L118 104L244 402Z"/><path d="M102 402L252 60L402 402Z"/>` +
+  `<path d="M264 402L404 30L544 402Z"/></g>` +
+  `<g fill="#6b52ab"><path d="M-44 402L60 238L164 402Z"/><path d="M93.9 402L168.4 113.9L242.9 402Z"/>` +
+  `<path d="M252.2 402L345 39.9L437.8 402Z"/><path d="M338 402L438 210L538 402Z"/></g>` +
+  `<g fill="#b79bff"><path d="M8 402L126 300L244 402Z"/><path d="M150 402L288 258L426 402Z"/>` +
+  `<path d="M320 402L424 302L528 402Z"/></g>` +
+  `<polyline points="30,352 104,282 166,322 254.4,121.5 345,76" fill="none" stroke-linecap="round" ` +
+  `stroke-linejoin="round" stroke="#dccbff" stroke-width="20"/>` +
+  `<circle cx="30" cy="352" r="20" fill="#dccbff"/><circle cx="104" cy="282" r="20" fill="#dccbff"/>` +
+  `<circle cx="166" cy="322" r="20" fill="#dccbff"/><circle cx="345" cy="76" r="20" fill="#dccbff"/>` +
+  `<circle cx="254.4" cy="121.5" r="27" fill="#e9b26a"/></svg>`;
+
+/**
+ * The provider chooser.
+ *
+ * Styleless in the sense that matters — no stylesheet, no font, no image
+ * request. Every byte it needs is in this response, because it renders before
+ * the SPA exists and, on a cold environment, before the origin has anything to
+ * serve.
+ */
 export const chooserPage = (choices) =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
-  `<title>Sign in</title>` +
-  `<style>body{font:16px/1.5 system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;` +
-  `background:#0f1115;color:#e6e8eb}main{max-width:20rem;width:100%;padding:2rem}h1{font-size:1.25rem;margin:0 0 1rem}` +
-  `a{display:block;padding:.75rem 1rem;margin:0 0 .5rem;border:1px solid #2a2f3a;border-radius:.5rem;` +
-  `color:#e6e8eb;text-decoration:none;text-align:center}a:hover{border-color:#7aa2f7}</style>` +
-  `<main><h1>Sign in</h1>` +
-  // The label comes from PROFILES, never from the request, so there is nothing
-  // here for a caller to inject. Same for href: the idp key is already known to
-  // be one of ours because it survived the availability filter.
-  choices.map((c) => `<a href="${c.href}">Continue with ${c.label}</a>`).join("") +
+  `<title>Sign in — fit</title>` +
+  `<style>body{font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;display:grid;` +
+  `place-items:center;min-height:100vh;padding:1.5rem;background:#0f1115;color:#e6e8eb}` +
+  `main{width:100%;max-width:22rem;padding:2rem 1.75rem;background:#15181f;border:1px solid #2a2f3a;` +
+  `border-radius:1rem;text-align:center}h1{font-size:1.125rem;font-weight:600;margin:1.25rem 0 .25rem}` +
+  `p{font-size:.8125rem;color:#9aa3ad;margin:0 0 1.5rem}` +
+  `a{display:flex;align-items:center;justify-content:center;gap:.625rem;padding:.7rem 1rem;margin:0 0 .75rem;` +
+  `border:1px solid #2a2f3a;border-radius:.625rem;background:#1b1f28;color:#e6e8eb;font-size:.875rem;` +
+  `font-weight:500;text-decoration:none}a:last-child{margin-bottom:0}` +
+  `a:hover{background:#212633;border-color:#7aa2f7}` +
+  `.ico{display:inline-flex;width:18px;height:18px}</style>` +
+  `<main>${MARK}<h1>fit</h1><p>Sign in to continue</p>` +
+  // Label, icon and idp key all come from PROFILES, never from the request, so
+  // there is nothing here for a caller to inject. The href's idp is already
+  // known to be one of ours because it survived the availability filter.
+  choices
+    .map(
+      (c) =>
+        `<a href="${c.href}"><span class="ico">${c.icon}</span><span>Continue with ${c.label}</span></a>`,
+    )
+    .join("") +
   `</main>`;
 
 export const errorPage = (title, reason, links = []) =>

@@ -913,6 +913,147 @@ button:disabled {
   min-width: 0;
 }
 
+/* --- Free-form logging ----------------------------------------------------- */
+
+.freeform-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+
+/* The exercise field takes the slack; weight and reps stay narrow because they
+   hold two or three characters and a wide box invites a wrong one. */
+.freeform-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.freeform-row > :nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.freeform-row input {
+  width: 5rem;
+}
+
+/* The combobox inside a row carries its own label element, which is redundant
+   next to the numbered row — hidden rather than removed so the control keeps
+   an accessible name. */
+.freeform-row label:not(.field__label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.freeform-day ul {
+  margin: 0 0 var(--s3);
+  padding-left: var(--s4);
+}
+
+/* --- Catalogue curation ---------------------------------------------------- */
+
+/* Name grows, the two selects and the button take what they need. `wrap` rather
+   than a media query: this row is inside a card whose width depends on the
+   sidebar, so the breakpoint that matters is the container's, not the page's. */
+.add-exercise {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--s3);
+}
+
+.add-exercise label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  min-width: 0;
+}
+
+.add-exercise label:first-child {
+  flex: 1 1 14rem;
+}
+
+.vocabulary summary {
+  cursor: pointer;
+}
+
+/* `summary` is `display: list-item`; an `h2` inside it would otherwise break to
+   its own line and leave the disclosure triangle stranded above it. */
+.vocabulary summary h2 {
+  display: inline;
+  margin: 0;
+}
+
+.vocabulary__list {
+  list-style: none;
+  margin: var(--s3) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.vocabulary__list li {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+}
+
+/* Struck through, not hidden: a retired word still classifies real history, and
+   the point of the row is that you can restore it. */
+.vocabulary__list li.is-retired span:first-child {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.add-word {
+  display: flex;
+  gap: var(--s2);
+}
+
+.add-word input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* What the slot is for, under the exercise it is currently filled with.
+   Small and quiet: it is the standing description of a requirement, not a
+   change you need to read every session. */
+.exercise-row__intent {
+  margin: calc(var(--s1) * -1) 0 var(--s2);
+  font-size: 0.85rem;
+}
+
+/* Reference, not instruction — collapsed by default, but present, because
+   `MR` and `MR10` are load-bearing notation the app otherwise never explains. */
+.glossary {
+  margin-top: var(--s4);
+}
+
+.glossary dl {
+  margin: var(--s2) 0 0;
+  display: grid;
+  gap: var(--s2);
+}
+
+.glossary dt {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.glossary dd {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
 .exercise-row__form {
   margin-top: var(--s3);
   padding-top: var(--s3);

@@ -39,7 +39,9 @@ import {
   measurementSchema,
   seasonPlanSchema,
   testResultsSchema,
+  vocabularyWordSchema,
 } from "./schemas.js";
+import { isAxis, listVocabularies, ProtectedWordError, putVocabulary } from "./vocabulary.js";
 
 /**
  * The router.
@@ -612,6 +614,43 @@ const ROUTES: Route[] = [
       json({
         exercise: await curateExercise(ctx.identity, catalogueEntrySchema.parse(await req.json())),
       }),
+  },
+
+  // --- The vocabularies the catalogue classifies on --------------------------
+  // Equipment and movement used to be closed enums in the program package, so
+  // adding a word meant a deploy — and the absence of "Band" silently filed
+  // every banded movement under Machine.
+  {
+    method: "GET",
+    pattern: /^\/api\/vocabulary$/,
+    handle: async (ctx) => json(await listVocabularies(ctx.identity)),
+  },
+  {
+    method: "PUT",
+    pattern: /^\/api\/vocabulary\/([a-z]+)$/,
+    handle: async (ctx, req, _url, params) => {
+      const axis = params[0] as string;
+      if (!isAxis(axis)) {
+        return json({ error: "unknown_axis", axis, expected: ["equipment", "movement"] }, 404);
+      }
+      try {
+        const word = await putVocabulary(
+          ctx.identity,
+          axis,
+          vocabularyWordSchema.parse(await req.json()),
+        );
+        return json({ word });
+      } catch (error) {
+        // A refusal, not a failure: retiring a movement a prescribed slot needs
+        // would leave that slot's picker empty, and an empty picker reads as a
+        // filter rather than as a misconfiguration. 409 so the UI can show the
+        // reason next to the control that caused it.
+        if (error instanceof ProtectedWordError) {
+          return json({ error: "protected_word", message: error.message }, 409);
+        }
+        throw error;
+      }
+    },
   },
 
   // --- Imported history ------------------------------------------------------

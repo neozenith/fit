@@ -10,8 +10,19 @@
 # (ADR-0008): the reader needs IAM on a parameter prefix, not the writer's
 # backend credentials.
 
+# The table list is a LITERAL, and it must match `infra/modules/data/main.tf`.
+#
+# It cannot be derived: `for_each` over a value read from SSM is unknown at plan
+# time, which would make a cold environment unplannable (ADR-0022) — the exact
+# thing the SSM-not-remote-state rule exists to avoid.
+#
+# A literal that must match another file is drift waiting to happen, and it did:
+# adding `programs` to the data module without adding it here produced a table
+# the API could see the name of and had no IAM to query, which surfaces as a 502
+# with `AccessDeniedException` and nothing at plan time. `make ci` now fails when
+# these two lists disagree — see the `data-tables` check in the Makefile.
 data "aws_ssm_parameter" "table_arn" {
-  for_each = toset(["blocks", "sets", "measurements", "cardio", "season", "catalogue"])
+  for_each = toset(["blocks", "sets", "measurements", "cardio", "season", "catalogue", "programs"])
   name     = "/${local.app_name}/${var.environment}/data/table/${each.key}"
 }
 

@@ -34,6 +34,7 @@ export const ROLE_INTENT: Record<ExerciseRole, string> = {
   upperBackVertical: "Upper back #2 — a vertical pull.",
   optional: "Optional accessory — free choice, and fine to skip.",
   optionalLower: "Optional lower body — free choice, and fine to skip.",
+  assistance: "Assistance volume — the program's supporting work, not a test.",
 };
 
 /**

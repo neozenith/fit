@@ -1,39 +1,39 @@
 import { describe, expect, test } from "bun:test";
 import { sessionCompletion, sessionState } from "./completion.js";
+import { fixed, freeChoice, percentageOf, sessionPlan } from "./plan.js";
 import type { Session } from "./types.js";
 
-const session = (): Session => ({
-  week: 1,
-  day: 1,
-  date: "2026-08-03",
-  dayOffset: 0,
-  weekTitle: "Muscular Conditioning",
-  exercises: [
-    {
-      exercise: "Squat",
-      role: "primary",
-      sets: [{ weight: 55, reps: { kind: "fixed", reps: 6 } }],
-    },
-    {
-      exercise: "Deadlift",
-      role: "primary",
-      sets: [{ weight: 65, reps: { kind: "fixed", reps: 6 } }],
-    },
+const session = (): Session => {
+  const plan = sessionPlan("test-w1d1", "Squat & Deadlift", [
+    { exercise: "Squat", reps: fixed(6), load: percentageOf("squat", 0.8), role: "primary" },
+    { exercise: "Deadlift", reps: fixed(6), load: percentageOf("deadlift", 0.8), role: "primary" },
     // The two the program deliberately leaves unprescribed.
-    { exercise: "Landmine SA OHP", role: "optional", sets: [] },
-    { exercise: "Landmine SA Row", role: "optional", sets: [] },
-  ],
-  notes: [],
-});
+    freeChoice("Landmine SA OHP", "optional"),
+    freeChoice("Landmine SA Row", "optional"),
+  ]);
+
+  return {
+    sessionRef: "B-20260803-W1D1",
+    week: 1,
+    day: 1,
+    date: "2026-08-03",
+    dayOffset: 0,
+    name: plan.name,
+    phase: "Muscular Conditioning",
+    activities: plan.activities,
+    notes: [],
+  };
+};
 
 describe("session completion", () => {
   test("counts EVERY exercise, including unprescribed ones", () => {
-    // The bug this replaced: filtering on `sets.length > 0` reported a session
-    // of four exercises as having two, which disagreed with the list beneath it.
+    // The bug this replaced: filtering on "has prescribed sets" reported a
+    // session of four exercises as having two, which disagreed with the list
+    // beneath it.
     expect(sessionCompletion(session()).total).toBe(4);
   });
 
-  test("an unprescribed exercise needs one set; a prescribed one needs all of them", () => {
+  test("an unprescribed exercise needs one activity; a prescribed one needs all of them", () => {
     const partial = sessionCompletion(session(), {
       Squat: [{}],
       "Landmine SA OHP": [{}],
@@ -66,8 +66,20 @@ describe("session completion", () => {
   test("set totals cap per exercise, so extra sets cannot exceed the target", () => {
     const log = { Squat: [{}, {}, {}], Deadlift: [{}] };
     const result = sessionCompletion(session(), log);
-    // Three sets logged against a one-set prescription still counts as one.
+    // Three activities logged against a one-set prescription still counts as one.
     expect(result.setsDone).toBe(2);
     expect(result.setsTotal).toBe(4);
+  });
+
+  test("a multi-set exercise needs every one of its sets", () => {
+    const plan = sessionPlan("multi", "Squat only", [
+      { exercise: "Squat", reps: fixed(5), load: percentageOf("squat", 0.8) },
+      { exercise: "Squat", reps: fixed(5), load: percentageOf("squat", 0.8) },
+      { exercise: "Squat", reps: fixed(5), load: percentageOf("squat", 0.8) },
+    ]);
+    const s: Session = { ...session(), activities: plan.activities };
+
+    expect(sessionCompletion(s, { Squat: [{}, {}] }).done).toBe(0);
+    expect(sessionCompletion(s, { Squat: [{}, {}, {}] }).done).toBe(1);
   });
 });

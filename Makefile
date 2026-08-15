@@ -68,11 +68,13 @@ typecheck: ## Typecheck every TypeScript workspace
 
 .PHONY: test
 test: ## Run unit tests
-	# Both paths, explicitly. `bun test packages` alone left the edge
+	# Every path, explicitly. `bun test packages` alone left the edge
 	# authenticator's suite — the security boundary — running only when someone
 	# thought to invoke it by hand, which is the same silent gap the typecheck
-	# target above was widened to close.
-	bun test packages infra/modules/edge/src/auth
+	# target above was widened to close. `api/src` joined the list when the
+	# read-path adapter for pre-rebuild blocks landed there: it is the one piece
+	# of code whose failure looks like history disappearing.
+	bun test packages api/src infra/modules/edge/src/auth
 
 .PHONY: history
 history: ## Curate reference/*.xlsx into Parquet under reference/history/
@@ -133,8 +135,34 @@ tf-workflows: ## Every stack has a CI caller, and every caller has a stack
 	[ "$$missing" = "0" ] && echo "==> every stack has a caller, and every caller a stack"; \
 	exit $$missing
 
+.PHONY: tf-tables
+tf-tables: ## The api stack grants IAM on exactly the tables the data module creates
+	# Checked because the failure is SILENT AT PLAN TIME and loud in production.
+	# `infra/stacks/api/main.tf` reads one SSM parameter per table to build the
+	# API role's policy, and that list is a LITERAL — it cannot be derived,
+	# because a `for_each` over a value read from SSM is unknown at plan time and
+	# would make a cold environment unplannable (ADR-0022).
+	#
+	# So the two lists must be kept in step by hand, and when they drift the
+	# symptom is nasty: terraform plans clean, applies clean, and the API returns
+	# 502 with `AccessDeniedException` on exactly the routes that touch the new
+	# table. Adding `programs` to the data module without adding it here is how
+	# this check came to exist.
+	@set -e; \
+	data_tables=$$(sed -n '/^  tables = {/,/^  }/p' infra/modules/data/main.tf \
+	  | grep -oE '^    [a-z_]+ = \{' | awk '{print $$1}' | sort); \
+	api_tables=$$(grep -oE 'for_each = toset\(\[[^]]*\]\)' infra/stacks/api/main.tf \
+	  | head -1 | grep -oE '"[a-z_]+"' | tr -d '"' | sort); \
+	if [ "$$data_tables" != "$$api_tables" ]; then \
+	  echo "ERROR: infra/modules/data/main.tf and infra/stacks/api/main.tf disagree on the table list."; \
+	  echo "  only in data: $$(comm -23 <(echo "$$data_tables") <(echo "$$api_tables") | tr '\n' ' ')"; \
+	  echo "  only in api : $$(comm -13 <(echo "$$data_tables") <(echo "$$api_tables") | tr '\n' ' ')"; \
+	  exit 1; \
+	fi; \
+	echo "==> api grants IAM on exactly the $$(echo "$$data_tables" | wc -w | tr -d ' ') tables data creates"
+
 .PHONY: tf-check
-tf-check: tf-workflows ## fmt-check + validate every stack. No cloud, no state.
+tf-check: tf-workflows tf-tables ## fmt-check + validate every stack. No cloud, no state.
 	@set -e; \
 	terraform fmt -check -recursive infra; \
 	for dir in infra/stacks/*/; do \

@@ -17,37 +17,51 @@ const isoInstant = z.iso.datetime({ offset: true });
 
 export const unitsSchema = z.enum(["kg", "lb"]);
 
-export const accessoriesSchema = z.object({
-  upperBackHorizontal: z.string().min(1),
-  shoulder: z.string().min(1),
-  upperBackVertical: z.string().min(1),
-  optional1: z.string().min(1),
-  optional2: z.string().min(1),
-  optionalLower1: z.string().min(1),
-  optionalLower2: z.string().min(1),
-  deadliftVariation: z.string().min(1),
-});
+/**
+ * A weight-shaped parameter has to be a positive, finite number under 1000.
+ *
+ * The upper bound is not paranoia about world records — it is a guard against a
+ * units mix-up. Someone entering a kilogram max into a pound-configured block
+ * produces a plausible-looking number; someone fat-fingering an extra digit
+ * produces 4000, and every prescribed weight in the block silently becomes
+ * unliftable.
+ *
+ * It is enforced inside `parameterValue` below rather than as a named schema,
+ * because the parameter bag is open: which keys are weights is a fact the
+ * PROGRAM declares, not one this file can enumerate.
+ */
 
 /**
- * A one-rep max has to be a positive, finite number.
+ * One program parameter value.
  *
- * The upper bound is not paranoia about world records — it is a guard against
- * a units mix-up. Someone entering a kilogram max into a pound-configured
- * block produces a plausible-looking number; someone fat-fingering an extra
- * digit produces 4000, and every prescribed weight in the block silently
- * becomes unliftable.
+ * A bounded string OR a number, and deliberately nothing else. The parameter bag
+ * is open by design — a program declares its own keys, and a custom program's
+ * keys are authored by the athlete — so the schema cannot enumerate them. What
+ * it CAN do is bound each value, which is where the real risk is: a 4000 in a
+ * max makes every prescribed weight in the block unliftable.
  */
-const oneRepMax = z.number().positive().max(1000);
+const parameterValue = z.union([z.number().finite().min(-10000).max(10000), z.string().max(120)]);
 
+export const programParametersSchema = z
+  .record(z.string().min(1).max(60), parameterValue)
+  // A bag with a thousand keys is not a training block, it is an attack.
+  .refine((p) => Object.keys(p).length <= 100, {
+    message: "a program may declare at most 100 parameters",
+  });
+
+/**
+ * Instantiate a Program into a Block.
+ *
+ * `programId` is required and NOT defaulted here. A block whose program is
+ * implicit is a block nobody can re-roll correctly later, and the historical
+ * default belongs at the migration boundary (`repo`/read path), not at the
+ * write path where it would quietly stamp new blocks with an assumption.
+ */
 export const createBlockSchema = z.object({
+  programId: z.string().min(1).max(80),
   startDate: isoDate,
   units: unitsSchema,
-  oneRepMax: z.object({
-    bench: oneRepMax,
-    squat: oneRepMax,
-    deadlift: oneRepMax,
-  }),
-  accessories: accessoriesSchema.partial().optional(),
+  parameters: programParametersSchema,
   derivedFrom: z.string().optional(),
 });
 
@@ -57,7 +71,7 @@ export const testResultsSchema = z.object({
   results: z
     .array(
       z.object({
-        lift: z.enum(["bench", "squat", "deadlift"]),
+        lift: z.enum(["bench", "squat", "deadlift", "press", "row"]),
         weight: z.number().positive().max(1000),
         // The program defines behaviour for 1-4; beyond that the engine
         // extrapolates and says so. Zero is a failed lift and projects nothing.
@@ -67,22 +81,49 @@ export const testResultsSchema = z.object({
     .max(3),
 });
 
-export const logSetSchema = z.object({
+/**
+ * ONE logged exercise activity — one set of reps of one exercise.
+ *
+ * Everything attributing it to a plan is OPTIONAL, and that is the model, not a
+ * convenience (ADR-0036). Logging is the primary act: an activity with an
+ * exercise, a rep count and a timestamp is complete. `blockId`, `sessionRef`,
+ * `week` and `day` are metadata a session-driven log happens to know.
+ *
+ * `week` is bounded at 60 rather than 6 because a 5×5 block runs twelve weeks by
+ * default and a 5/3/1 block runs four per cycle. The old bound of 6 was Candito
+ * leaking into a shape that is not Candito's.
+ */
+export const logActivitySchema = z.object({
   timestamp: isoInstant.optional(),
   exercise: z.string().min(1).max(120),
   weight: z.number().nonnegative().max(1000).optional(),
   reps: z.number().int().min(0).max(200),
   units: unitsSchema,
   setIndex: z.number().int().positive().max(50).optional(),
-  blockId: z.string().optional(),
-  week: z.number().int().min(1).max(6).optional(),
+  blockId: z.string().max(80).optional(),
+  sessionRef: z.string().max(120).optional(),
+  week: z.number().int().min(1).max(60).optional(),
   day: z.number().int().min(1).max(7).optional(),
   notes: z.string().max(500).optional(),
+  /** A correction names the record it replaces; nothing is edited in place. */
+  supersedes: z.string().max(80).optional(),
 });
 
-/** A whole session's sets in one request — the normal case, not the exception. */
-export const logSetsSchema = z.object({
-  sets: z.array(logSetSchema).min(1).max(200),
+/** A whole session's activities in one request — the normal case, not the exception. */
+export const logActivitiesSchema = z.object({
+  activities: z.array(logActivitySchema).min(1).max(200),
+});
+
+/**
+ * The pre-rebuild request shape, still accepted.
+ *
+ * A deployed SPA is not upgraded atomically with the API — a browser tab open
+ * across the release still posts `{sets: [...]}`. Rejecting it would lose a
+ * session's work for the sake of a field name, so both shapes are accepted and
+ * normalised at the boundary (ADR-0038).
+ */
+export const legacyLogSetsSchema = z.object({
+  sets: z.array(logActivitySchema).min(1).max(200),
 });
 
 export const measurementSchema = z.object({
@@ -249,5 +290,109 @@ export const blockStateSchema = z.object({
 export const vocabularyWordSchema = z.object({
   key: z.string().trim().min(1).max(40),
   label: z.string().trim().min(1).max(60),
+  retired: z.boolean().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Authoring: SessionPlans, and the custom Programs built from them
+// ---------------------------------------------------------------------------
+
+/**
+ * How many reps a prescribed activity asks for.
+ *
+ * A discriminated union rather than a loose object, so `{kind: "range"}` with no
+ * bounds is rejected at the boundary instead of rendering as "×undefined-undefined".
+ */
+export const repSpecSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("fixed"), reps: z.number().int().min(0).max(200) }),
+  z.object({
+    kind: z.literal("range"),
+    min: z.number().int().min(0).max(200),
+    max: z.number().int().min(0).max(200),
+  }),
+  z.object({ kind: z.literal("maxReps") }),
+  z.object({ kind: z.literal("maxRepsCapped"), cap: z.number().int().min(1).max(200) }),
+  z.object({ kind: z.literal("unprescribed") }),
+]);
+
+/**
+ * How a prescribed activity's load is determined.
+ *
+ * Nudges are bounded tightly: they are counted in INCREMENTS, so ±10 is already
+ * a 25kg swing. A four-digit nudge is a typo or an attack, never a program.
+ */
+export const loadSpecSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("absolute"), weight: z.number().nonnegative().max(1000) }),
+  z.object({
+    kind: z.literal("reference"),
+    ref: z.string().min(1).max(60),
+    percentage: z.number().min(0).max(3),
+    preNudge: z.number().int().min(-10).max(10).optional(),
+    nudge: z.number().int().min(-10).max(10).optional(),
+  }),
+  z.object({ kind: z.literal("unprescribed") }),
+]);
+
+/**
+ * ONE prescribed set, as the plan editor posts it.
+ *
+ * No `setIndex`: the server re-derives it from position, so a reordered or
+ * partially-deleted list cannot leave a gap in the numbering.
+ */
+export const planActivitySchema = z.object({
+  exercise: z.string().trim().min(1).max(120),
+  reps: repSpecSchema,
+  load: loadSpecSchema,
+  role: z.string().max(40).optional(),
+  note: z.string().max(300).optional(),
+});
+
+export const sessionPlanSchema = z.object({
+  planId: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(500).optional(),
+  intensityLabel: z.string().max(120).optional(),
+  notes: z.array(z.string().max(500)).max(20).default([]),
+  activities: z.array(planActivitySchema).min(1).max(200),
+});
+
+export const programParameterSpecSchema = z.object({
+  key: z.string().trim().min(1).max(60),
+  label: z.string().trim().min(1).max(120),
+  kind: z.enum(["oneRepMax", "weight", "exercise", "integer", "percentage", "choice"]),
+  options: z
+    .array(z.object({ value: z.string().max(60), label: z.string().max(120) }))
+    .max(20)
+    .optional(),
+  default: z.union([z.number().finite(), z.string().max(120)]).optional(),
+  help: z.string().max(500).optional(),
+  group: z.string().max(60).optional(),
+});
+
+/**
+ * A custom Program definition.
+ *
+ * `dayOffset` is authored directly rather than derived from week and day,
+ * because a real training week is irregular — Candito's own week 1 lands on days
+ * 0, 1, 3, 4 and 5. Deriving the offset would force every custom program onto a
+ * tiling that no actual program uses.
+ */
+export const customProgramSchema = z.object({
+  programId: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(1000).default(""),
+  parameters: z.array(programParameterSpecSchema).max(60).default([]),
+  schedule: z
+    .array(
+      z.object({
+        planId: z.string().min(1).max(80),
+        week: z.number().int().min(1).max(60),
+        day: z.number().int().min(1).max(7),
+        dayOffset: z.number().int().min(0).max(420),
+        phase: z.string().max(120).optional(),
+      }),
+    )
+    .max(400)
+    .default([]),
   retired: z.boolean().optional(),
 });

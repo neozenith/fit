@@ -35,6 +35,9 @@ Status values: `Accepted`, `Superseded by ADR-NNNN`, `Proposed`.
 | [0023](#adr-0023--ci-concurrency-is-keyed-on-the-terraform-state-key-not-the-git-ref) | CI concurrency is keyed on the Terraform state key | Accepted |
 | [0024](#adr-0024--the-spa-fallback-lives-in-the-edge-function-not-in-custom_error_response) | The SPA fallback lives in the edge function | Accepted |
 | [0025](#adr-0025--duckdb-in-the-lambda-replaces-glue-and-athena) | DuckDB in the Lambda replaces Glue and Athena | Accepted |
+| [0036](#adr-0036--the-domain-is-program--block--session--exerciseactivity-and-logging-needs-none-of-it) | The domain is Program → Block → Session → ExerciseActivity | Accepted |
+| [0037](#adr-0037--a-built-in-program-and-a-hand-authored-one-are-the-same-kind-of-thing) | A built-in program and a hand-authored one are the same kind of thing | Accepted |
+| [0038](#adr-0038--an-append-only-store-changes-shape-on-read-never-by-migration) | An append-only store changes shape on READ, never by migration | Accepted |
 
 ---
 
@@ -1202,3 +1205,189 @@ exist in the source tree.
 > **Lens.** A provider is offered when its secret is seeded, never because it is
 > listed. A configured-but-unseeded provider is a hidden provider, not a broken
 > button.
+
+---
+
+## ADR-0036 — The domain is Program → Block → Session → ExerciseActivity, and logging needs none of it
+
+**Status.** Accepted. Supersedes the implicit model ADR-0001 was written against.
+
+**Context.** The application modelled exactly one program. `BlockConfig` held
+three named one-rep maxes and eight named accessory slots; `generateBlock` was a
+hardcoded six-week function; a logged set was a `SetRecord` whose fields
+included `blockId`, `week` and `day`. Every one of those names is a fact about
+*Candito specifically*, and nothing in the model said so.
+
+The cost surfaced the moment a second program was considered. 5/3/1 trains four
+lifts and takes percentages of a *training* max; 5×5 takes working weights and
+progresses per session. Neither fits `oneRepMax: {bench, squat, deadlift}`, and
+neither fits a `week` bounded at 6. The model was not extensible because it was
+not a model — it was one program's parameters promoted to a schema.
+
+A second, quieter problem: a prescription and a log shared one shape. A
+`PrescribedSet` had an optional `weight` and a `RepSpec`; a `SetRecord` had an
+optional `weight` and a rep count. Code that handled "a set" could be handed
+either, and the type system could not tell it which — the precondition for
+reporting what you were *told* to do as though you had *done* it.
+
+**Decision.** Rebuild the vocabulary from the atom up:
+
+```
+Exercise           a movement, identified by name
+ExerciseActivity   ONE set of reps of one Exercise
+  · Prescribed       a rep SPEC and a load SPEC
+  · Logged           a rep COUNT and a weight
+SessionPlan        an ordered list of prescribed activities
+Program            a PARAMETRISED schedule of SessionPlans
+Block              one instantiation of a Program, on the calendar
+```
+
+Four rules fall out, and each one is the point of a distinct failure:
+
+1. **Prescribed and logged are different TYPES.** Not two states of one type,
+   not one type with optional fields. A function cannot accidentally accept the
+   wrong one.
+2. **One activity per set.** "5 sets of 3" is five records, because a single
+   record with a count cannot represent `3, 3, 3, 2, 1` — the ordinary case.
+   `setIndex` restarts per exercise, because that is what is counted at the bar.
+3. **A Block stores `programId` and `parameters`, and nothing else.** Named
+   lifts and named accessory slots are a program's declaration, not a schema.
+4. **A LoggedExerciseActivity needs an exercise, a rep count and a timestamp.**
+   Everything attributing it to a block or a session is optional metadata.
+   Logging is the primary act; a program is a convenience that suggests what to
+   log. That absence is the record — an activity with no `blockId` is
+   deliberately outside every block's progress count.
+
+**Consequences.** Three programs ship where one did, and a fourth is one
+registry entry with no UI work: the parameter declarations drive the form and
+the schedule drives the calendar. The golden tests against the source workbook
+pass **unchanged**, which is the evidence the vocabulary moved and the
+arithmetic did not.
+
+The `week` bound moved from 6 to 60, because a 5×5 block runs twelve weeks by
+default. That bound was Candito leaking into a shape that is not Candito's, and
+it is worth naming as the class of bug this ADR exists to prevent.
+
+> **Lens.** Before adding a field, ask which entity in the ladder owns it. A
+> field that is really one program's parameter belongs in `parameters`, never in
+> the schema — a schema that names `bench` cannot describe a program that does
+> not bench.
+
+> **Lens.** Never model an intention and an observation as one type. If a field
+> would be optional only because sometimes-it-is-a-plan-and-sometimes-it-is-a-
+> fact, that is two types.
+
+> **Lens.** Logging must never require a plan. Any change that makes `blockId`,
+> `week` or `sessionRef` mandatory has inverted the model: the log is the point,
+> and the program is the convenience.
+
+---
+
+## ADR-0037 — A built-in program and a hand-authored one are the same kind of thing
+
+**Status.** Accepted.
+
+**Context.** "Let me build my own program" is easy to implement badly, and the
+bad implementation is always the same: a reduced authoring model beside the real
+engine. The custom path gets fixed weights where the built-ins get percentages,
+gets a regular weekly tiling where the built-ins get irregular day offsets, and
+gets its own rounding — which drifts from the real one within a release or two.
+
+The reduced version is also what makes the built-ins unverifiable as examples: if
+a built-in uses machinery an author cannot reach, "the premade programs are built
+on the same foundation" is a claim with nothing behind it.
+
+**Decision.** One `Program` interface, one `rolloutBlock`, one `LoadSpec`.
+
+A built-in is a TypeScript literal; a custom program is a stored definition
+compiled by `compileCustomProgram` into **exactly** that interface. By the time
+anything downstream sees a program it cannot tell which kind it was handed except
+by reading `origin`, which exists so the UI can label it, never so the engine can
+branch on it.
+
+`LoadSpec` is what carries the weight of this. Three cases — `absolute`,
+`reference` (a percentage of a named parameter, with nudges counted in
+increments), and `unprescribed` — are all any of the three built-ins needs, so an
+author needs nothing more either. Percentages, rounding, unit increments and
+calendars resolve in `rolloutBlock` alone, so three programs cannot grow three
+subtly different rounding rules.
+
+The escape hatch that would have broken this was a `derive` hook: 5/3/1 needs a
+*training* max, derived from the entered 1RM and rising per cycle. It is a
+declared, general part of the interface rather than a special case inside the
+5/3/1 code, and derived parameters are merged **under** the declared ones so a
+program can never overwrite what the athlete actually entered.
+
+**Consequences.** The SPA compiles custom programs in the browser using the same
+module (ADR-0019), so a custom block previews as you type exactly as a built-in
+does. The claim is testable, and is tested: a hand-built definition is asserted
+to produce the same rounding as a built-in through the same call.
+
+Two failures are named rather than swallowed. A schedule slot referencing a
+missing plan **throws at compile time**, because a schedule that silently loses a
+day produces a block that looks complete and is missing a session. A load
+referencing an undeclared parameter is a **warning**, not a 400, because an
+author mid-edit routinely has one and rejecting it would make the editor unusable.
+
+> **Lens.** If a capability exists for a built-in and not for an author, the
+> abstraction is wrong. Add it to the shared interface or remove it from the
+> built-in — never fork the engine.
+
+> **Lens.** A program-specific need becomes a declared, general hook or it does
+> not exist. `derive` is legitimate because every program may use it; an
+> `if (programId === "wendler-531")` inside the resolver would not be.
+
+---
+
+## ADR-0038 — An append-only store changes shape on READ, never by migration
+
+**Status.** Accepted.
+
+**Context.** ADR-0036 changed the stored shape of a block: nested `oneRepMax` and
+`accessories` became a flat `parameters` bag under a named `programId`. Storage
+is append-only and the API role has no `DeleteItem` or `UpdateItem` (ADR-0013),
+so the two familiar options were both unavailable or unacceptable — a backfill
+job would need permissions the design deliberately withholds, and a dual-write
+would put two shapes in the table forever with no forcing function to converge.
+
+Stranding the old blocks was never an option. They are the record of what was
+actually trained.
+
+**Decision.** Adapt on read, in one function. `adaptBlock` takes any stored block
+item and returns a current `BlockConfig`; it is **idempotent**, so no caller has
+to ask which shape it is holding. A pre-rebuild item's nested maxes and accessory
+choices flatten into exactly the parameter set the Candito program declares —
+losslessly, because the program's parameters were derived *from* them — and the
+`programId` defaults to Candito, which every pre-rebuild block was.
+
+The default lives at the **read** path only. A new block must still name its
+program explicitly, so the compatibility shim cannot quietly stamp an assumption
+onto data written from now on.
+
+The same principle covers the wire: a browser tab open across the release still
+posts `{sets: [...]}` where the current client posts `{activities: [...]}`. Both
+are accepted and normalised at the boundary, and both field names come back in
+the response. Losing a session's work for the sake of a field name is not a
+trade worth making.
+
+**Consequences.** No migration job, no backfill, no dual-write, and no
+permissions added to the API role. The correctness claim is asserted rather than
+assumed: a pre-rebuild block must roll out **byte-identically** to one written
+after, and that is a test. The seed data deliberately writes one block in the old
+shape so a local run and the e2e suite exercise the adapter rather than trusting
+its unit tests.
+
+**Consequences, honestly.** The adapter is permanent. It is ~40 lines and it will
+be read by everyone who touches block loading forever. That is the price of an
+append-only store, and it is cheaper than the alternative.
+
+> **Lens.** In an append-only store, a shape change is a read-path concern. If a
+> proposal needs `UpdateItem` on historical rows, the proposal is wrong, not the
+> permission boundary.
+
+> **Lens.** A compatibility default belongs on the read path and nowhere else. On
+> the write path it stops being compatibility and becomes an assumption nobody
+> declared.
+
+> **Lens.** Prove an adapter with an equivalence test, not an inspection. "It
+> parses" is not the claim; "it produces the same answer" is.

@@ -56,9 +56,9 @@ export const LogAnythingPage = () => {
 
   const load = useCallback(
     () =>
-      Promise.all([api.catalogue(), api.sets()]).then(([c, s]) => {
-        setCatalogue(c.exercises.filter((e) => !e.retired));
-        setRecent(s.sets as Parameters<typeof byDay>[0]);
+      Promise.all([api.catalogue(), api.activities()]).then(([c, a]) => {
+        setCatalogue(c.exercises.filter((e: CuratedExercise) => !e.retired));
+        setRecent(a.activities as Parameters<typeof byDay>[0]);
       }),
     [],
   );
@@ -90,7 +90,7 @@ export const LogAnythingPage = () => {
     setSaving(true);
     setError(null);
     try {
-      await api.logSets(
+      await api.logActivities(
         filled.map((r, index) => {
           const weight = Number(r.weight);
           return {

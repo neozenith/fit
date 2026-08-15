@@ -440,6 +440,54 @@ main {
   border-color: var(--accent);
 }
 
+/*
+ * A warning pill carries the SAME text colour as body copy, tinted only in its
+ * border and background. Colour alone is never the signal — the words inside it
+ * are, which is what keeps it readable for anyone who cannot separate the hue.
+ */
+.pill--warn {
+  border-color: var(--status-warning);
+  background: color-mix(in srgb, var(--status-warning) 14%, var(--surface));
+  color: var(--fg);
+}
+
+/*
+ * A large selectable card — the program picker.
+ *
+ * A radio group would be the semantically obvious control, but each option
+ * carries a title, a description and an attribution, and a radio's label is a
+ * single run of text. `aria-pressed` on a button conveys the same selected state
+ * and lets the option keep its structure.
+ */
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: var(--s3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.choice:hover {
+  border-color: var(--accent);
+}
+
+.choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.choice .pill {
+  align-self: flex-start;
+}
+
 .muted {
   color: var(--muted);
 }

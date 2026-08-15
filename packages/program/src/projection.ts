@@ -80,15 +80,22 @@ export const proposeNextBlock = (
 ): { config: BlockConfig; projections: ProjectedMax[]; carriedForward: LiftKey[] } => {
   const projections: ProjectedMax[] = [];
   const carriedForward: LiftKey[] = [];
-  const oneRepMax = { ...current.oneRepMax };
+  const parameters = { ...current.parameters };
 
+  // Only the lifts THIS block actually carries a max for. Iterating every known
+  // lift would invent a `press` seed for a Candito block, which projects three
+  // lifts and has no opinion about the fourth.
   for (const lift of LIFT_KEYS) {
+    const seed = Number(current.parameters[lift]);
+    if (!Number.isFinite(seed) || seed <= 0) continue;
+
     const result = results.find((r) => r.lift === lift);
     const projection = result ? projectMax(lift, result.weight, result.reps, current.units) : null;
     if (projection) {
       projections.push(projection);
-      oneRepMax[lift] = projection.projectedRounded;
+      parameters[lift] = projection.projectedRounded;
     } else {
+      // An untested lift has not got weaker: its seed carries forward unchanged.
       carriedForward.push(lift);
     }
   }
@@ -96,10 +103,10 @@ export const proposeNextBlock = (
   return {
     config: {
       blockId: options.blockId,
+      programId: current.programId,
       startDate: options.startDate,
       units: current.units,
-      oneRepMax,
-      accessories: { ...current.accessories },
+      parameters,
       derivedFrom: current.blockId,
     },
     projections,
@@ -120,14 +127,22 @@ export const applyFailureAdjustment = (
   options: { blockId: string; startDate?: string; factor?: number },
 ): BlockConfig => {
   const factor = options.factor ?? 0.975;
+  const seed = Number(current.parameters[lift]);
+  // A lift this block does not carry a max for cannot be reduced. Returning the
+  // config unchanged beats writing a `NaN` seed that renders as "NaN kg" on
+  // every session for six weeks.
+  if (!Number.isFinite(seed) || seed <= 0) {
+    return { ...current, blockId: options.blockId, derivedFrom: current.blockId };
+  }
+
   return {
     ...current,
     blockId: options.blockId,
     startDate: options.startDate ?? current.startDate,
     derivedFrom: current.blockId,
-    oneRepMax: {
-      ...current.oneRepMax,
-      [lift]: mround(current.oneRepMax[lift] * factor, increment(current.units)),
+    parameters: {
+      ...current.parameters,
+      [lift]: mround(seed * factor, increment(current.units)),
     },
   };
 };

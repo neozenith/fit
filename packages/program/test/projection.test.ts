@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_ACCESSORIES } from "../src/defaults.js";
 import {
   applyFailureAdjustment,
   projectMax,
@@ -11,10 +10,16 @@ import { increment, mround, workingWeight } from "../src/units.js";
 
 const CONFIG: BlockConfig = {
   blockId: "block-1",
+  programId: "candito-6-week",
   startDate: "2026-01-05",
   units: "kg",
-  oneRepMax: { bench: 40, squat: 70, deadlift: 80 },
-  accessories: DEFAULT_ACCESSORIES,
+  parameters: {
+    bench: 40,
+    squat: 70,
+    deadlift: 80,
+    shoulder: "Military Press",
+    upperBackHorizontal: "Barbell Row",
+  },
 };
 
 describe("MROUND matches Excel's semantics", () => {
@@ -93,8 +98,11 @@ describe("block-to-block recursion (ADR-0013)", () => {
 
     expect(config.blockId).toBe("block-2");
     expect(config.derivedFrom).toBe("block-1");
-    expect(CONFIG.oneRepMax.squat).toBe(70); // the parent is untouched
-    expect(config.oneRepMax).toEqual({ squat: 72.5, bench: 40, deadlift: 85 });
+    expect(config.programId).toBe("candito-6-week"); // same program, new seed
+    expect(CONFIG.parameters["squat"]).toBe(70); // the parent is untouched
+    expect(config.parameters["squat"]).toBe(72.5);
+    expect(config.parameters["bench"]).toBe(40);
+    expect(config.parameters["deadlift"]).toBe(85);
   });
 
   test("an untested lift carries its seed forward rather than being dropped", () => {
@@ -104,30 +112,46 @@ describe("block-to-block recursion (ADR-0013)", () => {
       { blockId: "block-2", startDate: "2026-02-16" },
     );
     expect(carriedForward).toEqual(["bench", "deadlift"]);
-    expect(config.oneRepMax.bench).toBe(40);
-    expect(config.oneRepMax.deadlift).toBe(80);
+    expect(config.parameters["bench"]).toBe(40);
+    expect(config.parameters["deadlift"]).toBe(80);
   });
 
-  test("accessories carry forward by value, not by reference", () => {
+  test("only lifts this block carries a max for are considered", () => {
+    // Candito projects three lifts. Iterating every KNOWN lift would invent a
+    // `press` and a `row` seed for a block that has no opinion about either.
+    const { carriedForward, config } = proposeNextBlock(CONFIG, [], {
+      blockId: "block-2",
+      startDate: "2026-02-16",
+    });
+    expect(carriedForward).not.toContain("press");
+    expect(config.parameters["press"]).toBeUndefined();
+  });
+
+  test("non-numeric parameters carry forward by value, not by reference", () => {
     const { config } = proposeNextBlock(CONFIG, [], {
       blockId: "block-2",
       startDate: "2026-02-16",
     });
-    config.accessories.shoulder = "Push Press";
-    expect(CONFIG.accessories.shoulder).toBe("Military Press");
+    config.parameters["shoulder"] = "Push Press";
+    expect(CONFIG.parameters["shoulder"]).toBe("Military Press");
   });
 });
 
 describe("the 2.5% failure rule", () => {
   test("reduces one lift and leaves the others alone", () => {
     const next = applyFailureAdjustment(CONFIG, "squat", { blockId: "block-1b" });
-    expect(next.oneRepMax.squat).toBe(67.5); // mround(68.25, 2.5)
-    expect(next.oneRepMax.bench).toBe(40);
+    expect(next.parameters["squat"]).toBe(67.5); // mround(68.25, 2.5)
+    expect(next.parameters["bench"]).toBe(40);
     expect(next.derivedFrom).toBe("block-1");
   });
 
   test("never mutates the block it adjusts", () => {
     applyFailureAdjustment(CONFIG, "squat", { blockId: "block-1b" });
-    expect(CONFIG.oneRepMax.squat).toBe(70);
+    expect(CONFIG.parameters["squat"]).toBe(70);
+  });
+
+  test("a lift this block has no max for is left alone rather than set to NaN", () => {
+    const next = applyFailureAdjustment(CONFIG, "press", { blockId: "block-1b" });
+    expect(next.parameters["press"]).toBeUndefined();
   });
 });

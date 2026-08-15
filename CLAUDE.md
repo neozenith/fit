@@ -38,6 +38,21 @@ touches AWS is a **sibling** target, never a dependency of `ci`.
   `tempfile.mkdtemp()`.
 - **No prescribed weight is ever persisted** (ADR-0001). If you are about to
   write a computed weight to DynamoDB, stop.
+- **Logging never requires a plan** (ADR-0036). A `LoggedExerciseActivity` needs
+  an exercise, a rep count and a timestamp. Any change that makes `blockId`,
+  `week` or `sessionRef` mandatory has inverted the model.
+- **A prescription and a log are different types.** If you find yourself adding
+  an optional field because a value is sometimes-a-plan-and-sometimes-a-fact,
+  that is two types.
+- **One rollout, every program** (ADR-0037). Percentages, rounding and unit
+  increments resolve in `rolloutBlock` and nowhere else. A branch on `programId`
+  inside the resolver is the bug this rule exists to prevent.
+- **A block stores `programId` and `parameters`, and nothing else.** A schema
+  field named after a specific lift (`bench`, `squat`) is a program's parameter
+  that escaped into the schema.
+- **Shape changes happen on READ** (ADR-0038). The API role has no `UpdateItem`
+  on history, so a stored-shape change is an adapter in `api/src/legacy.ts`, not
+  a backfill. Prove it with an equivalence test, never an inspection.
 - **No `resource` blocks in `infra/stacks/`.** `grep -rn '^resource' infra/stacks/`
   must return nothing — stacks compose modules and own naming; modules own
   resources.
@@ -50,6 +65,28 @@ touches AWS is a **sibling** target, never a dependency of `ci`.
   that silently disables a feature.
 
 ## Known gotchas
+
+- **Adding a DynamoDB table means editing TWO files.** `infra/modules/data/main.tf`
+  creates it; `infra/stacks/api/main.tf` has a **literal** list of table names it
+  reads one SSM parameter each from, to build the API role's IAM policy. The
+  literal cannot be derived — a `for_each` over an SSM value is unknown at plan
+  time and would make a cold environment unplannable (ADR-0022).
+
+  When the two drift, terraform **plans clean and applies clean**, and the API
+  returns `502` with `AccessDeniedException` on exactly the routes touching the
+  new table. `make ci` now catches it (`make tf-tables`), which is the only
+  reason it is not a trap any more.
+
+- **A commit that adds an API route needs TWO passes.** `Deploy frontend` runs
+  `tools/smoke.ts` against the deployed environment and races `TF api` — separate
+  workflows, no ordering between them (ADR-0008 buys that independence
+  deliberately). Adding a route *and* its smoke check in one commit fails the
+  first frontend deploy with `HTTP 404 {"error":"not_found","path":"/api/…"}` on
+  exactly the new routes.
+
+  **Neither failure may be softened.** A smoke test that tolerated a missing
+  route would stop being able to detect a genuinely broken deploy. Re-run
+  `Deploy frontend` once `TF api` has applied.
 
 - **`config.json` for the edge function is not on disk.** Terraform's
   `archive_file` synthesizes it from `local.edge_config` at plan time, because

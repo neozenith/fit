@@ -1,8 +1,9 @@
 import {
   type BlockConfig,
+  type ExerciseGroup,
   GLOSSARY,
-  type PrescribedExercise,
-  type PrescribedSet,
+  groupByExercise,
+  type PrescribedExerciseActivity,
   ROLE_INTENT,
   requiredSets,
   type Session,
@@ -48,18 +49,27 @@ interface RowDraft {
  * is no target at all, and pre-filling one would invite confirming a lift
  * nobody performed (ADR-0031).
  */
-const prescribedRow = (set: PrescribedSet | undefined): RowDraft => {
-  const reps = set?.reps;
+const prescribedRow = (activity: PrescribedExerciseActivity | undefined): RowDraft => {
+  const reps = activity?.reps;
   const target =
-    reps && "kind" in reps
-      ? reps.kind === "fixed"
+    reps === undefined
+      ? ""
+      : reps.kind === "fixed"
         ? String(reps.reps)
         : reps.kind === "range"
           ? String(reps.max)
-          : ""
-      : "";
-  return { weight: set?.weight !== undefined ? String(set.weight) : "", reps: target };
+          : "";
+  return { weight: activity?.weight !== undefined ? String(activity.weight) : "", reps: target };
 };
+
+/**
+ * What a slot is FOR, with a fallback.
+ *
+ * Roles are open now — a hand-authored plan may carry any role string its author
+ * typed — so an exhaustive lookup would render `undefined` for a custom one.
+ */
+const roleIntent = (role: string | undefined): string =>
+  (role ? (ROLE_INTENT as Record<string, string | undefined>)[role] : undefined) ?? "";
 
 export const LogPage = () => {
   const [block, setBlock] = useState<BlockConfig | null>(null);
@@ -129,8 +139,8 @@ export const LogPage = () => {
 
   const key = (exercise: string, index: number) => `${exercise}#${index}`;
 
-  const draftFor = (exercise: PrescribedExercise, index: number): RowDraft =>
-    drafts[key(exercise.exercise, index)] ?? prescribedRow(exercise.sets[index]);
+  const draftFor = (group: ExerciseGroup, index: number): RowDraft =>
+    drafts[key(group.exercise, index)] ?? prescribedRow(group.activities[index]);
 
   /**
    * Edit one row, and CARRY THE VALUE FORWARD to later untouched rows.
@@ -143,20 +153,20 @@ export const LogPage = () => {
    * `touched` is what stops a deliberate 40/40/35/30 from being flattened back
    * to 40 the moment you correct set one.
    */
-  const update = (exercise: PrescribedExercise, index: number, patch: Partial<RowDraft>) =>
+  const update = (group: ExerciseGroup, index: number, patch: Partial<RowDraft>) =>
     setDrafts((d) => {
       const next = {
         ...d,
-        [key(exercise.exercise, index)]: { ...draftFor(exercise, index), ...patch },
+        [key(group.exercise, index)]: { ...draftFor(group, index), ...patch },
       };
       if (!selected) return next;
 
-      const logged = loggedFor(selected, exercise.exercise).length;
-      const rows = Math.max(exercise.sets.length, logged + 1);
+      const logged = loggedFor(selected, group.exercise).length;
+      const rows = Math.max(group.activities.length, logged + 1);
       for (let i = index + 1; i < rows; i += 1) {
-        const later = key(exercise.exercise, i);
+        const later = key(group.exercise, i);
         if (i < logged || touched.has(later)) continue;
-        const base = next[later] ?? prescribedRow(exercise.sets[i]);
+        const base = next[later] ?? prescribedRow(group.activities[i]);
         // Weight carries unconditionally; REPS carry only into a row the
         // program left blank, so a prescribed 12/12/10/8 keeps its taper.
         next[later] = {
@@ -168,13 +178,13 @@ export const LogPage = () => {
     });
 
   /** Save exactly one set. The whole page exists to make this one tap. */
-  const saveSet = async (exercise: PrescribedExercise, index: number) => {
+  const saveSet = async (group: ExerciseGroup, index: number) => {
     if (!selected) return;
-    const rowKey = key(exercise.exercise, index);
-    const draft = draftFor(exercise, index);
+    const rowKey = key(group.exercise, index);
+    const draft = draftFor(group, index);
     const reps = Number(draft.reps);
     if (draft.reps.trim() === "" || !Number.isFinite(reps) || reps < 0) {
-      setError(`Enter the reps you did for ${exercise.exercise}, set ${index + 1}.`);
+      setError(`Enter the reps you did for ${group.exercise}, set ${index + 1}.`);
       return;
     }
 
@@ -182,16 +192,19 @@ export const LogPage = () => {
     setError(null);
     try {
       const weight = draft.weight.trim() === "" ? undefined : Number(draft.weight);
-      await api.logSets([
+      await api.logActivities([
         {
-          exercise: exercise.exercise,
+          exercise: group.exercise,
           ...(weight === undefined || !Number.isFinite(weight) ? {} : { weight }),
           reps,
           units: block.units,
-          // The ordinal within the session, so a set logged out of order still
+          // The ordinal within the EXERCISE, so a set logged out of order still
           // reports where it belonged rather than when it was typed.
           setIndex: index + 1,
+          // Attribution, which a logged activity does not require — it is here
+          // because this page happens to know it, not because the log needs it.
           blockId: block.blockId,
+          sessionRef: selected.sessionRef,
           week: selected.week,
           day: selected.day,
         },
@@ -245,8 +258,11 @@ export const LogPage = () => {
       {selected && (
         <section className="card">
           <h2>
-            Week {selected.week}, day {selected.day}
-            <span className="muted"> · {formatDate(selected.date)}</span>
+            {selected.name}
+            <span className="muted">
+              {" "}
+              · W{selected.week}D{selected.day} · {formatDate(selected.date)}
+            </span>
           </h2>
           {selected.intensityLabel && <p className="muted">{selected.intensityLabel}</p>}
           {selected.notes.map((note) => (
@@ -256,20 +272,20 @@ export const LogPage = () => {
           ))}
 
           <div className="exercise-list">
-            {selected.exercises.map((exercise) => (
+            {groupByExercise(selected.activities).map((group) => (
               <ExerciseSets
-                key={exercise.exercise}
-                exercise={exercise}
+                key={group.exercise}
+                group={group}
                 units={block.units}
-                logged={loggedFor(selected, exercise.exercise)}
+                logged={loggedFor(selected, group.exercise)}
                 busy={busy}
-                draftFor={(i) => draftFor(exercise, i)}
+                draftFor={(i) => draftFor(group, i)}
                 onChange={(i, patch) => {
-                  setTouched((was) => new Set(was).add(key(exercise.exercise, i)));
-                  update(exercise, i, patch);
+                  setTouched((was) => new Set(was).add(key(group.exercise, i)));
+                  update(group, i, patch);
                 }}
-                onSave={(i) => saveSet(exercise, i)}
-                rowKey={(i) => key(exercise.exercise, i)}
+                onSave={(i) => saveSet(group, i)}
+                rowKey={(i) => key(group.exercise, i)}
               />
             ))}
           </div>
@@ -304,7 +320,7 @@ export const LogPage = () => {
  * and the log is a record of what happened (ADR-0013).
  */
 const ExerciseSets = ({
-  exercise,
+  group,
   units,
   logged,
   busy,
@@ -313,7 +329,7 @@ const ExerciseSets = ({
   onSave,
   rowKey,
 }: {
-  exercise: PrescribedExercise;
+  group: ExerciseGroup;
   units: string;
   logged: LoggedSet[];
   busy: string | null;
@@ -324,7 +340,10 @@ const ExerciseSets = ({
 }) => {
   // One row per prescribed set, and one more than whatever has been logged, so
   // there is always an empty row to record an extra set into.
-  const prescribed = exercise.sets.length;
+  // An activity the program declined to prescribe does not count toward the
+  // target: "do some rows" is one entry with no rep count, and treating it as a
+  // prescribed set would make the exercise read as 0/1 forever.
+  const prescribed = group.activities.filter((a) => a.reps.kind !== "unprescribed").length;
   const rows = Math.max(prescribed, logged.length + 1);
   // An UNPRESCRIBED exercise needs a single set: "do some rows" has no set
   // count to satisfy, and treating it as never-completable made every session
@@ -334,7 +353,7 @@ const ExerciseSets = ({
   return (
     <div className={`exercise-row${complete ? " exercise-row--logged" : ""}`}>
       <div className="exercise-row__head">
-        <strong>{exercise.exercise}</strong>
+        <strong>{group.exercise}</strong>
         <div className="spacer" />
         <span className={`pill${complete ? " pill--accent" : ""}`}>
           {logged.length}
@@ -349,12 +368,12 @@ const ExerciseSets = ({
 
           `exercise.note` wins where the program gave specific guidance for this
           exercise; ROLE_INTENT is the standing description of the slot. */}
-      <p className="exercise-row__intent muted">{exercise.note ?? ROLE_INTENT[exercise.role]}</p>
+      <p className="exercise-row__intent muted">{group.note ?? roleIntent(group.role)}</p>
 
       <div className="set-rows">
         {Array.from({ length: rows }, (_, index) => {
           const done = logged[index];
-          const set = exercise.sets[index];
+          const set = group.activities[index];
           const draft = draftFor(index);
           const saving = busy === rowKey(index);
 
@@ -388,7 +407,7 @@ const ExerciseSets = ({
               <span className="set-row__n">{index + 1}</span>
               <input
                 className="set-row__weight"
-                aria-label={`${exercise.exercise} set ${index + 1} weight`}
+                aria-label={`${group.exercise} set ${index + 1} weight`}
                 inputMode="decimal"
                 value={draft.weight}
                 placeholder={units}
@@ -397,7 +416,7 @@ const ExerciseSets = ({
               <span className="muted">×</span>
               <input
                 className="set-row__reps"
-                aria-label={`${exercise.exercise} set ${index + 1} reps`}
+                aria-label={`${group.exercise} set ${index + 1} reps`}
                 inputMode="numeric"
                 value={draft.reps}
                 // A range or max-reps set shows what was ASKED for as a hint,
@@ -411,7 +430,7 @@ const ExerciseSets = ({
                 type="button"
                 className="set-row__save"
                 disabled={saving}
-                aria-label={`Save ${exercise.exercise} set ${index + 1}`}
+                aria-label={`Save ${group.exercise} set ${index + 1}`}
                 onClick={() => onSave(index)}
               >
                 {saving ? "…" : "✓"}

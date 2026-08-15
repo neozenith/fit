@@ -71,6 +71,17 @@ per stack, chained with `needs`.
 - **The archive role has no `PutItem`.** That is the append-only invariant
   (ADR-0013) enforced in IAM rather than trusted to the handler. Do not add it
   to "make the job idempotent" — it already is.
+- **Adding a table means editing TWO files, and the drift is invisible until
+  production.** `modules/data/main.tf` creates it; `stacks/api/main.tf` carries a
+  **literal** list of table names, one SSM read each, to build the API role's IAM
+  policy. That literal cannot be derived — `for_each` over an SSM value is
+  unknown at plan time and would make a cold environment unplannable (ADR-0022).
+
+  Drift between them **plans clean and applies clean**. The symptom arrives at
+  runtime as `502` with
+  `AccessDeniedException … not authorized to perform: dynamodb:Query`, on exactly
+  the routes touching the new table, with every other route green. `make ci` now
+  fails on the mismatch (`make tf-tables`) and names which list is short.
 - **The DuckDB layer cannot be built by `bun install`.** The native binding is
   an *optional dependency* selected by `os`/`cpu`, so any ordinary install
   resolves for the build host — a macOS laptop or an x86 runner — and publishes

@@ -39,6 +39,10 @@ locals {
       description = "Curated exercise definitions: equipment and movement category."
       ages_out    = false
     }
+    programs = {
+      description = "Hand-authored SessionPlans and the custom Programs built from them. Never aged out: a block from two years ago still has to roll out, and it cannot do that without the plans it was scheduled from."
+      ages_out    = false
+    }
   }
 }
 

@@ -247,11 +247,19 @@ test.describe("overview", () => {
 });
 
 test.describe("block inputs", () => {
-  test("states the block's existence and offers the seed inputs", async ({ page }) => {
+  test("states the block's existence and offers the selected program's inputs", async ({
+    page,
+  }) => {
     await page.goto("/block-inputs");
-    await expect(page.locator("main h1")).toHaveText("Block inputs");
+    await expect(page.locator("main h1")).toHaveText("Start a block");
 
-    for (const id of ["#squat", "#bench", "#deadlift", "#startDate", "#units"]) {
+    // The form is rendered from the PROGRAM's parameter declaration, so these
+    // ids exist because Candito declares them, not because the page hardcodes
+    // a lift list.
+    for (const id of ["#param-squat", "#param-bench", "#param-deadlift"]) {
+      await expect(page.locator(id)).toBeVisible();
+    }
+    for (const id of ["#startDate", "#units"]) {
       await expect(page.locator(id)).toBeVisible();
     }
     await expect(
@@ -259,18 +267,33 @@ test.describe("block inputs", () => {
     ).toBeVisible();
   });
 
+  test("offers every built-in program, and switching one changes the fields", async ({ page }) => {
+    await page.goto("/block-inputs");
+
+    for (const name of ["Candito 6-Week Strength", "Wendler 5/3/1", "StrongLifts 5×5"]) {
+      await expect(page.getByRole("button", { name: new RegExp(name) })).toBeVisible();
+    }
+
+    // 5/3/1 trains four lifts and Candito three, so the overhead press field
+    // appearing IS the proof the form follows the declaration.
+    await expect(page.locator("#param-press")).toHaveCount(0);
+    await page.getByRole("button", { name: /Wendler 5\/3\/1/ }).click();
+    await expect(page.locator("#param-press")).toBeVisible();
+    await expect(page.locator("#param-trainingMaxPct")).toBeVisible();
+  });
+
   test("offers all four optional accessory slots", async ({ page }) => {
     await page.goto("/block-inputs");
     // The spreadsheet's Optional Exercise 1/2 and Optional Lower Body 1/2 —
     // the inputs that made a block the athlete's rather than the program's.
     for (const slot of ["optional1", "optional2", "optionalLower1", "optionalLower2"]) {
-      await expect(page.locator(`#slot-${slot}`)).toBeVisible();
+      await expect(page.locator(`#param-${slot}`)).toBeVisible();
     }
   });
 
   test("an accessory picker can be browsed, searched, and typed into", async ({ page }) => {
     await page.goto("/block-inputs");
-    const field = page.locator("#slot-optional1");
+    const field = page.locator("#param-optional1");
     const combobox = page.locator(".combobox").filter({ has: field });
 
     // BROWSE. A `<datalist>` offered no way to see the options without first
@@ -332,7 +355,7 @@ test.describe("block inputs", () => {
 
   test("the deadlift slot offers every hinge, not a hardcoded four", async ({ page }) => {
     await page.goto("/block-inputs");
-    const field = page.locator("#slot-deadliftVariation");
+    const field = page.locator("#param-deadliftVariation");
     const combobox = page.locator(".combobox").filter({ has: field });
 
     await combobox.getByRole("button", { name: "Show all options" }).click();

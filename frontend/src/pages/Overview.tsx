@@ -1,6 +1,7 @@
 import {
   blockLabel,
-  generateBlock,
+  type Program,
+  rolloutBlock,
   type Session,
   sessionCompletion,
   sessionRef,
@@ -9,6 +10,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BlockProgress, type BlockSummary } from "../api.js";
 import { Banner, formatDate, formatShortDate, Loading } from "../components.jsx";
+import { usePrograms } from "../programs.js";
 import { useQueryParam } from "../router.jsx";
 
 /**
@@ -51,6 +53,9 @@ export const OverviewPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Resolved once for the page rather than once per block: built-ins are in the
+  // bundle already, and the custom ones cost one request between them.
+  const { find: findProgram } = usePrograms();
   const [selectedId, setSelected] = useQueryParam("block", "");
   const [span, setSpan] = useQueryParam("span", "year");
   const [showDeleted, setShowDeleted] = useQueryParam("deleted", "");
@@ -210,6 +215,7 @@ export const OverviewPage = () => {
       {selected && (
         <BlockDetail
           summary={selected}
+          program={findProgram(selected.block.programId)}
           today={today}
           busy={busy === selected.block.blockId}
           confirming={confirming === selected.block.blockId}
@@ -223,16 +229,17 @@ export const OverviewPage = () => {
 };
 
 /**
- * One block's six weeks — generated in the browser, for ANY block.
+ * One block's sessions — rolled out in the browser, for ANY block.
  *
- * `generateBlock` is a pure function of the block's seed values (ADR-0001) and
- * the same module the server runs (ADR-0019), so a historical or planned block
- * costs one function call rather than a request. An earlier version only had
- * the LIVE block's sessions in hand and showed a paragraph of summary for every
- * other one, which made the timeline's rows selectable but not inspectable.
+ * `rolloutBlock` is a pure function of the block's parameters (ADR-0001) and the
+ * same module the server runs (ADR-0019), so a historical or planned block costs
+ * one function call rather than a request. An earlier version only had the LIVE
+ * block's sessions in hand and showed a paragraph of summary for every other
+ * one, which made the timeline's rows selectable but not inspectable.
  */
 const BlockDetail = ({
   summary,
+  program,
   today,
   busy,
   confirming,
@@ -241,6 +248,7 @@ const BlockDetail = ({
   onAct,
 }: {
   summary: BlockSummary;
+  program: Program | undefined;
   today: string;
   busy: boolean;
   confirming: boolean;
@@ -250,14 +258,16 @@ const BlockDetail = ({
 }) => {
   const { block, progress } = summary;
   const sessions = useMemo(() => {
+    if (!program) return [] as Session[];
     try {
-      return generateBlock(block);
+      return rolloutBlock(program, block);
     } catch {
-      // A block written before a schema change could fail to generate. A
-      // paragraph beats an error boundary taking the whole page down.
+      // A block whose program no longer resolves, or whose parameters a program
+      // has since stopped understanding. A paragraph beats an error boundary
+      // taking the whole page down.
       return [] as Session[];
     }
-  }, [block]);
+  }, [block, program]);
 
   const weeks = [...new Set(sessions.map((s) => s.week))].sort((a, b) => a - b);
   const currentWeek = sessions.find((s) => s.date >= today)?.week ?? weeks.at(-1) ?? 1;
@@ -272,9 +282,7 @@ const BlockDetail = ({
         </span>
         <span className="muted">
           {" "}
-          · from {formatDate(block.startDate)} · seeds {block.oneRepMax.squat}/
-          {block.oneRepMax.bench}/{block.oneRepMax.deadlift}
-          {block.units}
+          · {program?.name ?? block.programId} · from {formatDate(block.startDate)} · {block.units}
         </span>
       </h2>
 
@@ -343,7 +351,7 @@ const BlockDetail = ({
                 >
                   <div className="calendar__label">
                     <strong>Week {week}</strong>
-                    <span className="muted">{weekSessions[0]?.weekTitle ?? ""}</span>
+                    <span className="muted">{weekSessions[0]?.phase ?? ""}</span>
                   </div>
                   <div className="calendar__days">
                     {weekSessions.map((session) => {

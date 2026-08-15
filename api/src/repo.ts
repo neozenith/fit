@@ -41,7 +41,14 @@ const client = DynamoDBDocumentClient.from(
   { marshallOptions: { removeUndefinedValues: true } },
 );
 
-export type LogicalTable = "blocks" | "sets" | "measurements" | "cardio" | "season" | "catalogue";
+export type LogicalTable =
+  | "blocks"
+  | "sets"
+  | "measurements"
+  | "cardio"
+  | "season"
+  | "catalogue"
+  | "programs";
 
 export const tableName = (logical: LogicalTable): string => `${TABLE_PREFIX}-${logical}`;
 

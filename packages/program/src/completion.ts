@@ -1,3 +1,4 @@
+import { groupByExercise } from "./plan.js";
 import type { Session } from "./types.js";
 
 /**
@@ -10,17 +11,20 @@ import type { Session } from "./types.js";
  * free-choice accessories the program deliberately leaves unprescribed were
  * silently excluded from the denominator.
  *
- * Every exercise counts. An unprescribed one needs a single logged set to be
- * done, because "do some rows" has no set count to satisfy; a prescribed one
+ * Every exercise counts. An unprescribed one needs a single logged activity to
+ * be done, because "do some rows" has no set count to satisfy; a prescribed one
  * needs all of its sets. Skipping an optional accessory therefore reads as
  * `3/4` — accurate, and better than a denominator that quietly disagrees with
  * what is on screen.
+ *
+ * Completion is a FOLD over logged activities, never a stored status (ADR-0001).
+ * A status field can disagree with the log; a fold cannot.
  */
 
-/** Logged sets per exercise name, for one session. */
-export type SessionLog = Record<string, { length: number }[]> | Record<string, unknown[]>;
+/** Logged activities per exercise name, for one session. */
+export type SessionLog = Record<string, unknown[]>;
 
-/** Sets required before an exercise counts as done. Unprescribed means one. */
+/** Activities required before an exercise counts as done. Unprescribed means one. */
 export const requiredSets = (prescribed: number): number => Math.max(1, prescribed);
 
 export interface SessionCompletion {
@@ -28,30 +32,35 @@ export interface SessionCompletion {
   done: number;
   /** Exercises in the session — ALL of them, prescribed or not. */
   total: number;
-  /** Sets logged, capped per exercise at what that exercise required. */
+  /** Activities logged, capped per exercise at what that exercise required. */
   setsDone: number;
-  /** Sets required across the session. */
+  /** Activities required across the session. */
   setsTotal: number;
-  /** At least one set logged against at least one exercise. */
+  /** At least one activity logged against at least one exercise. */
   started: boolean;
 }
 
 export const sessionCompletion = (session: Session, log: SessionLog = {}): SessionCompletion => {
+  // Grouped, because "done" is a question about EXERCISES and the session holds
+  // a flat list of one activity per set.
+  const groups = groupByExercise(session.activities);
+
   let done = 0;
   let setsDone = 0;
   let setsTotal = 0;
   let started = false;
 
-  for (const exercise of session.exercises) {
-    const need = requiredSets(exercise.sets.length);
-    const got = (log as Record<string, unknown[]>)[exercise.exercise]?.length ?? 0;
+  for (const group of groups) {
+    const prescribed = group.activities.filter((a) => a.reps.kind !== "unprescribed").length;
+    const need = requiredSets(prescribed);
+    const got = log[group.exercise]?.length ?? 0;
     if (got > 0) started = true;
     if (got >= need) done += 1;
     setsDone += Math.min(got, need);
     setsTotal += need;
   }
 
-  return { done, total: session.exercises.length, setsDone, setsTotal, started };
+  return { done, total: groups.length, setsDone, setsTotal, started };
 };
 
 export type SessionState = "done" | "partial" | "todo" | "future";

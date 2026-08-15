@@ -1,4 +1,4 @@
-import type { LiftKey, Units } from "./types.js";
+import type { LiftKey, LoggedExerciseActivity, Units } from "./types.js";
 
 /**
  * Observations: what actually happened, as opposed to what was prescribed.
@@ -6,31 +6,26 @@ import type { LiftKey, Units } from "./types.js";
  * Append-only by construction (ADR-0013). A correction is a new record whose
  * `supersedes` names the record it replaces; nothing is ever edited in place,
  * so "what did I believe in March" stays answerable.
+ *
+ * The strength observation is `LoggedExerciseActivity` (`types.ts`) — ONE set of
+ * reps of one exercise, carrying a timestamp and nothing else it needs. Its
+ * links to a block and a session are optional metadata, because logging does
+ * not require a program to be about (ADR-0036).
  */
 
-export interface SetRecord {
-  /** ISO 8601 instant the set was logged. Part of the sort key. */
-  timestamp: string;
-  /** Free text — matches the prescription's exercise name when it can. */
-  exercise: string;
-  /**
-   * Absolute load in `units`. Absent for bodyweight movements — explicitly
-   * `| undefined` because the importer builds records positionally and a
-   * bodyweight set must be able to carry the key with no value.
-   */
-  weight?: number | undefined;
-  reps: number;
-  units: Units;
-  /** Set ordinal within the session, 1-indexed, when known. */
-  setIndex?: number;
-  /** Links the record to a prescribed session, when logged from one. */
-  blockId?: string;
-  week?: number;
-  day?: number;
-  /** Marks this record as replacing an earlier one. */
-  supersedes?: string;
-  notes?: string;
-}
+/**
+ * The pre-rebuild name for a logged activity.
+ *
+ * Kept as an alias rather than deleted because the Parquet archive, the
+ * importer, and five years of curated history all speak this shape. Nothing new
+ * should use it.
+ *
+ * @deprecated Use `LoggedExerciseActivity`.
+ */
+export type SetRecord = Omit<LoggedExerciseActivity, "kind" | "id"> & {
+  kind?: "logged";
+  id?: string;
+};
 
 export interface CardioRecord {
   timestamp: string;

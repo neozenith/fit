@@ -1,4 +1,12 @@
-import type { BlockConfig, MeasurementRecord, Session, SetRecord } from "@fit/program";
+import type {
+  BlockConfig,
+  CustomProgramDefinition,
+  LoggedExerciseActivity,
+  MeasurementRecord,
+  ProgramParameterSpec,
+  Session,
+  StoredSessionPlan,
+} from "@fit/program";
 
 /**
  * The API client.
@@ -83,8 +91,27 @@ export interface VocabularyWord {
 export type VocabularyAxis = "equipment" | "movement";
 export type Vocabularies = Record<VocabularyAxis, VocabularyWord[]>;
 
+/**
+ * A Program as the API describes it — everything but the schedule function.
+ *
+ * `origin` is the ONLY thing distinguishing a built-in from one the athlete
+ * authored, and it exists so the UI can label it, not so anything can branch on
+ * it (ADR-0037).
+ */
+export interface ProgramSummary {
+  programId: string;
+  name: string;
+  description: string;
+  attribution: string | null;
+  origin: "builtin" | "custom";
+  parameters: ProgramParameterSpec[];
+}
+
 export interface BlockSummary {
   block: BlockConfig;
+  program: ProgramSummary | null;
+  /** The block's program no longer resolves. Its logged history still stands. */
+  programMissing?: boolean;
   progress: BlockProgress;
   sessionCount: number;
   completeCount: number;
@@ -92,9 +119,9 @@ export interface BlockSummary {
   lastDate: string;
   /** How many earlier versions of this block exist (ADR-0029). */
   supersededCount: number;
-  /** Hidden by a delete record. Its config and its logged sets still exist. */
+  /** Hidden by a delete record. Its config and its logged activities still exist. */
   deleted?: boolean;
-  /** Sets logged at or before this are excluded from progress. */
+  /** Activities logged at or before this are excluded from progress. */
   resetAt?: string | null;
 }
 
@@ -133,12 +160,32 @@ export interface PersonalBest {
   timestamp: string;
 }
 
+/**
+ * One logged activity as it comes back from the API.
+ *
+ * `kind` and `id` are optional because five years of imported history and every
+ * pre-rebuild write predate both (ADR-0038).
+ */
+export type LoggedActivity = Omit<LoggedExerciseActivity, "kind" | "id"> & {
+  kind?: "logged";
+  id?: string;
+};
+
+/** A custom program whose plans no longer compile, and why. */
+export interface BrokenProgram {
+  programId: string;
+  name: string;
+  reason: string;
+}
+
 export const api = {
   me: () => request<Identity>("/api/me"),
 
   currentBlock: () =>
     request<{
       block: BlockConfig | null;
+      program: ProgramSummary | null;
+      programMissing?: boolean;
       sessions: Session[];
       progress: BlockProgress;
       /** How many blocks exist at all — "never made one" vs "this is the live one". */
@@ -147,7 +194,41 @@ export const api = {
 
   /** Every block with its own progress — the year view's single request. */
   blocks: (includeDeleted = false) =>
-    request<{ blocks: BlockSummary[] }>(`/api/blocks${includeDeleted ? "?deleted=true" : ""}`),
+    request<{ blocks: BlockSummary[]; brokenPrograms: BrokenProgram[] }>(
+      `/api/blocks${includeDeleted ? "?deleted=true" : ""}`,
+    ),
+
+  // --- Programs and plans ----------------------------------------------------
+  // Built-in and custom arrive in ONE list. The picker does not group them, and
+  // nothing here can tell them apart except by reading `origin`.
+
+  /**
+   * Every program, plus the raw definitions of the custom ones.
+   *
+   * The definitions come along because a `Program` carries its schedule as a
+   * FUNCTION and JSON cannot. The SPA compiles them against the plans to preview
+   * a custom block in the browser, using the same module the server uses.
+   */
+  programs: () =>
+    request<{
+      programs: ProgramSummary[];
+      definitions: CustomProgramDefinition[];
+      broken: BrokenProgram[];
+    }>("/api/programs"),
+
+  putProgram: (definition: CustomProgramDefinition) =>
+    request<{ program: CustomProgramDefinition; warnings: string[] }>("/api/programs", {
+      method: "PUT",
+      body: JSON.stringify(definition),
+    }),
+
+  plans: () => request<{ plans: StoredSessionPlan[] }>("/api/plans"),
+
+  putPlan: (plan: unknown) =>
+    request<{ plan: StoredSessionPlan }>("/api/plans", {
+      method: "PUT",
+      body: JSON.stringify(plan),
+    }),
 
   /** Delete, restore or reset one block. All three are append-only. */
   setBlockState: (blockId: string, action: "delete" | "restore" | "reset") =>
@@ -172,13 +253,16 @@ export const api = {
       body: JSON.stringify(word),
     }),
 
-  sessions: (blockId: string, week6?: string) =>
-    request<{ block: BlockConfig; sessions: Session[] }>(
-      `/api/blocks/${encodeURIComponent(blockId)}/sessions${week6 ? `?week6=${week6}` : ""}`,
+  sessions: (blockId: string) =>
+    request<{ block: BlockConfig; program: ProgramSummary; sessions: Session[] }>(
+      `/api/blocks/${encodeURIComponent(blockId)}/sessions`,
     ),
 
   createBlock: (body: unknown) =>
-    request<{ block: BlockConfig }>("/api/blocks", { method: "POST", body: JSON.stringify(body) }),
+    request<{ block: BlockConfig; program: ProgramSummary }>("/api/blocks", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   projectNextBlock: (body: unknown) =>
     request<{
@@ -188,15 +272,26 @@ export const api = {
       note: string;
     }>("/api/blocks/project", { method: "POST", body: JSON.stringify(body) }),
 
-  sets: (since?: string) =>
-    request<{ sets: SetRecord[]; personalBests: Record<string, PersonalBest> }>(
-      `/api/sets${since ? `?since=${encodeURIComponent(since)}` : ""}`,
-    ),
+  /**
+   * Logged activities — the data that actually matters.
+   *
+   * Free of any program: an activity needs an exercise, a rep count and a
+   * timestamp, and nothing else (ADR-0036).
+   */
+  activities: (params: { since?: string; exercise?: string } = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined) as [string, string][],
+    );
+    return request<{
+      activities: LoggedActivity[];
+      personalBests: Record<string, PersonalBest>;
+    }>(`/api/activities${query.size > 0 ? `?${query}` : ""}`);
+  },
 
-  logSets: (sets: unknown[]) =>
-    request<{ written: number }>("/api/sets", {
+  logActivities: (activities: unknown[]) =>
+    request<{ written: number }>("/api/activities", {
       method: "POST",
-      body: JSON.stringify({ sets }),
+      body: JSON.stringify({ activities }),
     }),
 
   measurements: () =>

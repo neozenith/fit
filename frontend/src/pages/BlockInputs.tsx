@@ -1,11 +1,17 @@
 import {
-  type AccessoryChoices,
   type BlockConfig,
-  DEFAULT_ACCESSORIES,
-  generateBlock,
+  BUILTIN_PROGRAMS,
+  compileCustomProgram,
+  groupByExercise,
   movementLabel,
+  type Program,
+  type ProgramParameterSpec,
+  type ProgramParameters,
+  rolloutBlock,
   type Session,
   SLOT_MOVEMENT,
+  type StoredSessionPlan,
+  withDefaults,
 } from "@fit/program";
 import { useEffect, useMemo, useState } from "react";
 import { api, type CuratedExercise, type PersonalBest } from "../api.js";
@@ -14,13 +20,15 @@ import { Banner, formatDate, formatShortDate, Loading, repLabel } from "../compo
 import { navigate } from "../router.jsx";
 
 /**
- * The Inputs sheet: everything a six-week block is projected FROM.
+ * Instantiate a Program into a Block.
  *
- * Named `/block-inputs` rather than `/block` because that is what it is. The
- * page collects the handful of values the entire block is a pure function of
- * (ADR-0001) — three one-rep maxes, a start date, units, accessory choices —
- * and previews the six weeks those values produce, so the dates land somewhere
+ * The page collects the values the entire block is a pure function of (ADR-0001)
+ * and previews the sessions those values produce, so the dates land somewhere
  * visible BEFORE the block is committed rather than after.
+ *
+ * The form is GENERIC. It renders from the program's own `parameters`
+ * declaration, so adding a fourth program needs no work here at all — which is
+ * the same declaration the server validates against, so the two cannot drift.
  *
  * ON EDITING AND DELETING. Storage is append-only and the API role has no
  * `DeleteItem` (ADR-0029), so neither exists. "Edit" and "reset" are the same
@@ -29,34 +37,8 @@ import { navigate } from "../router.jsx";
  * writes a second row.
  */
 
-const LIFTS = [
-  { key: "squat", label: "Squat" },
-  { key: "bench", label: "Bench press" },
-  { key: "deadlift", label: "Deadlift" },
-] as const;
-
-/**
- * The accessory slots.
- *
- * Their options come from the CATALOGUE, filtered by the movement each slot
- * requires (`SLOT_MOVEMENT`). The hardcoded four-string menu each prescribed
- * slot used to carry was a second source of truth, and it showed: Romanian
- * Deadlift is in the log five times and is unambiguously a hinge, yet could not
- * be picked as a deadlift variation because it was not one of the four strings.
- *
- * The optional slots require no particular movement and so offer everything —
- * which is what the spreadsheet's free-text fields meant.
- */
-const SLOTS: Array<{ key: keyof AccessoryChoices; label: string }> = [
-  { key: "upperBackHorizontal", label: "Upper back — horizontal pull" },
-  { key: "shoulder", label: "Shoulder" },
-  { key: "upperBackVertical", label: "Upper back — vertical pull" },
-  { key: "deadliftVariation", label: "Deadlift variation" },
-  { key: "optional1", label: "Optional exercise 1" },
-  { key: "optional2", label: "Optional exercise 2" },
-  { key: "optionalLower1", label: "Optional lower body 1" },
-  { key: "optionalLower2", label: "Optional lower body 2" },
-];
+/** Slots whose picker is filtered by the movement the program asks for. */
+const isSlotKey = (key: string): boolean => key in SLOT_MOVEMENT;
 
 export const BlockInputsPage = () => {
   const [current, setCurrent] = useState<BlockConfig | null>(null);
@@ -67,16 +49,26 @@ export const BlockInputsPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [catalogue, setCatalogue] = useState<CuratedExercise[]>([]);
   const [inspecting, setInspecting] = useState<string | null>(null);
+  const [customPrograms, setCustomPrograms] = useState<Program[]>([]);
 
-  const [draft, setDraft] = useState({
-    startDate: new Date().toISOString().slice(0, 10),
-    units: "kg",
-    squat: "100",
-    bench: "80",
-    deadlift: "140",
-    accessories: DEFAULT_ACCESSORIES as AccessoryChoices,
-  });
+  const [programId, setProgramId] = useState<string>(BUILTIN_PROGRAMS[0]?.programId ?? "");
+  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [units, setUnits] = useState<"kg" | "lb">("kg");
+  const [values, setValues] = useState<Record<string, string>>({});
   const [seeded, setSeeded] = useState(false);
+
+  /**
+   * Every program the athlete can pick, built-in and custom together.
+   *
+   * The custom ones are COMPILED IN THE BROWSER from the same module the server
+   * uses (ADR-0019), so the preview below is the real rollout rather than an
+   * approximation of it.
+   */
+  const programs = useMemo(() => [...BUILTIN_PROGRAMS, ...customPrograms], [customPrograms]);
+  const program = useMemo(
+    () => programs.find((p) => p.programId === programId) ?? programs[0],
+    [programs, programId],
+  );
 
   useEffect(() => {
     api
@@ -85,6 +77,28 @@ export const BlockInputsPage = () => {
       // A catalogue that will not load leaves the pickers empty but still
       // typeable; the page's own error surface is for failures that block work.
       .catch(() => setCatalogue([]));
+  }, []);
+
+  useEffect(() => {
+    // Custom programs need their plans to compile. A definition that will not
+    // compile is skipped rather than crashing the picker — one broken program
+    // must not make the others unpickable.
+    Promise.all([api.programs(), api.plans()])
+      .then(([programsResponse, plansResponse]) => {
+        const plans: StoredSessionPlan[] = plansResponse.plans;
+        const compiled: Program[] = [];
+        for (const definition of programsResponse.definitions) {
+          if (definition.retired) continue;
+          try {
+            compiled.push(compileCustomProgram(definition, plans));
+          } catch {
+            // Already reported by the API in `broken`; skipping it here keeps
+            // one bad definition from making every other program unpickable.
+          }
+        }
+        setCustomPrograms(compiled);
+      })
+      .catch(() => setCustomPrograms([]));
   }, []);
 
   useEffect(() => {
@@ -97,26 +111,13 @@ export const BlockInputsPage = () => {
         if (r.block) {
           // Pre-filled from the live block, so the common action — "same setup,
           // new maxes" — is editing one number rather than retyping eleven.
-          setDraft({
-            startDate: r.block.startDate,
-            units: r.block.units,
-            squat: String(r.block.oneRepMax.squat),
-            bench: String(r.block.oneRepMax.bench),
-            deadlift: String(r.block.oneRepMax.deadlift),
-            accessories: r.block.accessories,
-          });
+          setProgramId(r.block.programId);
+          setStartDate(r.block.startDate);
+          setUnits(r.block.units);
+          setValues(
+            Object.fromEntries(Object.entries(r.block.parameters).map(([k, v]) => [k, String(v)])),
+          );
         } else {
-          // No block yet: seed from the estimated maxes rather than from
-          // invented defaults, so a first block starts from something true.
-          const estimate = (lift: string) => p.personalBests?.[lift]?.estimated;
-          setDraft((d) => ({
-            ...d,
-            squat: estimate("squat") ? String(Math.round(estimate("squat") as number)) : d.squat,
-            bench: estimate("bench") ? String(Math.round(estimate("bench") as number)) : d.bench,
-            deadlift: estimate("deadlift")
-              ? String(Math.round(estimate("deadlift") as number))
-              : d.deadlift,
-          }));
           setSeeded(Object.keys(p.personalBests ?? {}).length > 0);
         }
       })
@@ -124,26 +125,69 @@ export const BlockInputsPage = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  const setAccessory = (key: keyof AccessoryChoices, value: string) =>
-    setDraft((d) => ({ ...d, accessories: { ...d.accessories, [key]: value } }));
+  /**
+   * Fill in the selected program's declared defaults, and seed maxes from the log.
+   *
+   * Runs when the program changes, and deliberately does NOT clobber a value the
+   * athlete already typed: switching from 5/3/1 to Candito should keep the squat
+   * max you just entered, because it means the same thing in both.
+   */
+  useEffect(() => {
+    if (!program) return;
+    setValues((existing) => {
+      const next = { ...existing };
+      for (const spec of program.parameters) {
+        if (next[spec.key] !== undefined && next[spec.key] !== "") continue;
+        if (spec.default !== undefined) {
+          next[spec.key] = String(spec.default);
+          continue;
+        }
+        // No declared default: seed a max from the log rather than from an
+        // invented number, so a first block starts from something true.
+        const estimated = bests[spec.key]?.estimated;
+        if ((spec.kind === "oneRepMax" || spec.kind === "weight") && estimated) {
+          next[spec.key] = String(Math.round(estimated));
+        }
+      }
+      return next;
+    });
+  }, [program, bests]);
+
+  /**
+   * The parameter bag, typed.
+   *
+   * A numeric-kinded parameter becomes a number and everything else stays a
+   * string, which is exactly the split `ProgramParameters` models. Sending "100"
+   * where the resolver expects 100 would work by coercion today and break the
+   * first time a program compares rather than multiplies.
+   */
+  const parameters: ProgramParameters = useMemo(() => {
+    const bag: ProgramParameters = { units };
+    for (const spec of program?.parameters ?? []) {
+      const raw = values[spec.key];
+      if (raw === undefined || raw === "") continue;
+      const numeric =
+        spec.kind === "oneRepMax" ||
+        spec.kind === "weight" ||
+        spec.kind === "integer" ||
+        spec.kind === "percentage";
+      bag[spec.key] = numeric ? Number(raw) : raw;
+    }
+    return bag;
+  }, [program, values, units]);
 
   // The preview is generated IN THE BROWSER from the same module the server uses
-  // (ADR-0019), so it moves as you type. A round trip would make the six weeks
-  // something you see only after committing to them.
+  // (ADR-0019), so it moves as you type. A round trip would make the block
+  // something you see only after committing to it.
   const preview: Session[] = useMemo(() => {
-    const numbers = {
-      squat: Number(draft.squat),
-      bench: Number(draft.bench),
-      deadlift: Number(draft.deadlift),
-    };
-    if (Object.values(numbers).some((n) => !Number.isFinite(n) || n <= 0)) return [];
+    if (!program) return [];
     try {
-      return generateBlock({
+      return rolloutBlock(program, {
         blockId: "preview",
-        startDate: draft.startDate,
-        units: draft.units as "kg" | "lb",
-        oneRepMax: numbers,
-        accessories: draft.accessories,
+        programId: program.programId,
+        startDate,
+        units,
+        parameters: withDefaults(program, parameters),
       });
     } catch {
       // An invalid date is the only realistic failure, and it is transient —
@@ -151,21 +195,18 @@ export const BlockInputsPage = () => {
       // through fixing.
       return [];
     }
-  }, [draft]);
+  }, [program, parameters, startDate, units]);
 
   const create = async () => {
+    if (!program) return;
     setSaving(true);
     setError(null);
     try {
       await api.createBlock({
-        startDate: draft.startDate,
-        units: draft.units,
-        oneRepMax: {
-          squat: Number(draft.squat),
-          bench: Number(draft.bench),
-          deadlift: Number(draft.deadlift),
-        },
-        accessories: draft.accessories,
+        programId: program.programId,
+        startDate,
+        units,
+        parameters,
       });
       navigate("/overview");
     } catch (e: unknown) {
@@ -177,12 +218,12 @@ export const BlockInputsPage = () => {
 
   if (loading) return <Loading what="your block inputs" />;
 
-  const replacing = current !== null && current.startDate === draft.startDate;
+  const replacing = current !== null && current.startDate === startDate;
   const weeks = [...new Set(preview.map((s) => s.week))].sort((a, b) => a - b);
 
   /** Everything the catalogue offers for a slot, given the movement it needs. */
-  const optionsFor = (slot: keyof AccessoryChoices): string[] => {
-    const movement = SLOT_MOVEMENT[slot] ?? null;
+  const optionsFor = (key: string): string[] => {
+    const movement = SLOT_MOVEMENT[key] ?? null;
     return catalogue
       .filter((e) => !e.retired && (movement === null || e.movement === movement))
       .map((e) => e.exercise)
@@ -191,9 +232,16 @@ export const BlockInputsPage = () => {
 
   const inspected = preview.find((s) => `${s.week}-${s.day}` === inspecting);
 
+  /** Parameters grouped for the form, in declaration order. */
+  const groups = new Map<string, ProgramParameterSpec[]>();
+  for (const spec of program?.parameters ?? []) {
+    const key = spec.group ?? "Inputs";
+    groups.set(key, [...(groups.get(key) ?? []), spec]);
+  }
+
   return (
     <>
-      <h1>Block inputs</h1>
+      <h1>Start a block</h1>
       {error && <Banner variant="error">{error}</Banner>}
 
       <section className="card">
@@ -201,8 +249,7 @@ export const BlockInputsPage = () => {
           <>
             <h2>You have a block</h2>
             <p className="muted">
-              Started {formatDate(current.startDate)} · {current.units} · seeds{" "}
-              {current.oneRepMax.squat}/{current.oneRepMax.bench}/{current.oneRepMax.deadlift}
+              Started {formatDate(current.startDate)} · {current.units}
               {blockCount > 1 && <> · {blockCount} blocks recorded in total</>}
             </p>
             <p>
@@ -213,47 +260,48 @@ export const BlockInputsPage = () => {
           <>
             <h2>You have no block yet</h2>
             <p className="muted">
-              Everything the six weeks prescribe is computed from the values below, so nothing here
-              is guesswork you have to repeat later.
+              A block is one run of a program. Everything it prescribes is computed from the values
+              below, so nothing here is guesswork you have to repeat later.
             </p>
           </>
         )}
       </section>
 
+      {/* The program choice comes FIRST, because it decides what every field
+          below even is. */}
       <section className="card">
-        <h2>Seed one-rep maxes</h2>
-        <p className="muted">
-          The whole block is a projection of these three numbers. No prescribed weight is ever
-          stored — change a max and every session below moves with it.
-        </p>
-        <div className="row">
-          {LIFTS.map((lift) => (
-            <div className="field" key={lift.key}>
-              <label htmlFor={lift.key}>{lift.label}</label>
-              <input
-                id={lift.key}
-                type="number"
-                min="1"
-                step="2.5"
-                value={draft[lift.key]}
-                onChange={(e) => setDraft({ ...draft, [lift.key]: e.target.value })}
-              />
-              {/* The estimate from the log, offered rather than imposed. It is
-                  computed from every set ever recorded, so it is a better
-                  starting guess than memory — but a max is a decision, and
-                  overwriting one silently would be the wrong kind of help. */}
-              <Estimate
-                best={bests[lift.key]}
-                onUse={(v) => setDraft({ ...draft, [lift.key]: v })}
-              />
-            </div>
+        <h2>Program</h2>
+        <div className="grid">
+          {programs.map((p) => (
+            <button
+              type="button"
+              key={p.programId}
+              className={`choice${p.programId === program?.programId ? " choice--active" : ""}`}
+              aria-pressed={p.programId === program?.programId}
+              onClick={() => setProgramId(p.programId)}
+            >
+              <strong>{p.name}</strong>
+              {p.origin === "custom" && <span className="pill">yours</span>}
+              <span className="muted">{p.description}</span>
+              {p.attribution && <span className="muted">— {p.attribution}</span>}
+            </button>
           ))}
+        </div>
+        <p className="muted">
+          Built-in and your own programs are the same kind of thing, built the same way.{" "}
+          <a href="/plans">Build your own</a> from session plans.
+        </p>
+      </section>
+
+      <section className="card">
+        <h2>When and in what units</h2>
+        <div className="row">
           <div className="field">
             <label htmlFor="units">Units</label>
             <select
               id="units"
-              value={draft.units}
-              onChange={(e) => setDraft({ ...draft, units: e.target.value })}
+              value={units}
+              onChange={(e) => setUnits(e.target.value === "lb" ? "lb" : "kg")}
             >
               <option value="kg">kg</option>
               <option value="lb">lb</option>
@@ -264,53 +312,52 @@ export const BlockInputsPage = () => {
             <input
               id="startDate"
               type="date"
-              value={draft.startDate}
-              onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
             />
           </div>
         </div>
-        {seeded && !current && (
-          <p className="muted">
-            Seeded from your estimated maxes. Adjust anything that does not match what you would
-            actually attempt today.
-          </p>
-        )}
       </section>
 
-      <section className="card">
-        <h2>Accessories</h2>
-        <p className="muted">
-          The four <em>optional</em> slots offer the full exercise list; the prescribed slots offer
-          the program's own menus. Every field also accepts anything you type.
-        </p>
-        <div className="grid">
-          {SLOTS.map((slot) => {
-            const movement = SLOT_MOVEMENT[slot.key] ?? null;
-            return (
-              <Combobox
-                key={slot.key}
-                id={`slot-${slot.key}`}
-                label={
-                  <>
-                    {slot.label}{" "}
-                    <span className="muted">
-                      — {movement ? movementLabel(movement) : "any movement"}
-                    </span>
-                  </>
+      {/* Rendered entirely from the program's own parameter declaration. A new
+          program needs no code here. */}
+      {[...groups.entries()].map(([groupName, specs]) => (
+        <section className="card" key={groupName}>
+          <h2>{groupName}</h2>
+          <div className={specs.some((s) => s.kind === "exercise") ? "grid" : "row"}>
+            {specs.map((spec) => (
+              <ParameterField
+                key={spec.key}
+                spec={spec}
+                value={values[spec.key] ?? ""}
+                units={units}
+                best={bests[spec.key]}
+                options={spec.kind === "exercise" ? optionsFor(spec.key) : []}
+                movementHint={
+                  spec.kind === "exercise" && isSlotKey(spec.key)
+                    ? // A slot with no required movement accepts anything, which
+                      // is what the sheet's free-text fields meant.
+                      movementLabel(SLOT_MOVEMENT[spec.key] ?? "") || "any movement"
+                    : null
                 }
-                value={draft.accessories[slot.key]}
-                options={optionsFor(slot.key)}
-                onChange={(value) => setAccessory(slot.key, value)}
-                placeholder="Search or type"
+                onChange={(v) => setValues((prev) => ({ ...prev, [spec.key]: v }))}
               />
-            );
-          })}
-        </div>
-        <p className="muted">
-          Options come from the <a href="/exercises">exercise catalogue</a>, filtered by the
-          movement each slot needs. Curate an exercise there and it appears here.
-        </p>
-      </section>
+            ))}
+          </div>
+          {groupName === "Maxes" && seeded && !current && (
+            <p className="muted">
+              Seeded from your estimated maxes. Adjust anything that does not match what you would
+              actually attempt today.
+            </p>
+          )}
+          {groupName === "Accessories" && (
+            <p className="muted">
+              Options come from the <a href="/exercises">exercise catalogue</a>, filtered by the
+              movement each slot needs. Curate an exercise there and it appears here.
+            </p>
+          )}
+        </section>
+      ))}
 
       {/* The preview lives HERE rather than only on the overview, because the
           question it answers — "which days does this land on?" — is one you ask
@@ -318,12 +365,13 @@ export const BlockInputsPage = () => {
       <section className="card">
         <h2>What this produces</h2>
         {weeks.length === 0 ? (
-          <p className="muted">Fill in three positive maxes and a start date to see the block.</p>
+          <p className="muted">Fill in the inputs above to see the block.</p>
         ) : (
           <>
             <p className="muted">
-              {preview.length} sessions from {formatDate(preview[0]?.date ?? draft.startDate)} to{" "}
-              {formatDate(preview.at(-1)?.date ?? draft.startDate)}.
+              {preview.length} sessions across {weeks.length} weeks, from{" "}
+              {formatDate(preview[0]?.date ?? startDate)} to{" "}
+              {formatDate(preview.at(-1)?.date ?? startDate)}.
             </p>
             <div className="calendar">
               {weeks.map((week) => {
@@ -332,7 +380,7 @@ export const BlockInputsPage = () => {
                   <div key={week} className="calendar__week">
                     <div className="calendar__label">
                       <strong>Week {week}</strong>
-                      <span className="muted">{weekSessions[0]?.weekTitle ?? ""}</span>
+                      <span className="muted">{weekSessions[0]?.phase ?? ""}</span>
                     </div>
                     <div className="calendar__days">
                       {weekSessions.map((session) => {
@@ -346,9 +394,9 @@ export const BlockInputsPage = () => {
                             onClick={() => setInspecting(inspecting === id ? null : id)}
                           >
                             <span className="day__date">{formatShortDate(session.date)}</span>
-                            <span className="day__name">Day {session.day}</span>
+                            <span className="day__name">{session.name}</span>
                             <span className="day__meta">
-                              {session.exercises.filter((e) => e.sets.length > 0).length} exercises
+                              {groupByExercise(session.activities).length} exercises
                             </span>
                           </button>
                         );
@@ -364,7 +412,7 @@ export const BlockInputsPage = () => {
             {inspected ? (
               <div className="session-detail">
                 <h3>
-                  Week {inspected.week}, day {inspected.day}
+                  {inspected.name}
                   <span className="muted"> · {formatDate(inspected.date)}</span>
                 </h3>
                 {inspected.intensityLabel && <p className="muted">{inspected.intensityLabel}</p>}
@@ -377,16 +425,16 @@ export const BlockInputsPage = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {inspected.exercises.map((exercise) => (
-                        <tr key={exercise.exercise}>
-                          <td>{exercise.exercise}</td>
+                      {groupByExercise(inspected.activities).map((group) => (
+                        <tr key={group.exercise}>
+                          <td>{group.exercise}</td>
                           <td className="mono">
-                            {exercise.sets.length === 0
+                            {group.activities.every((a) => a.reps.kind === "unprescribed")
                               ? "—"
-                              : exercise.sets
+                              : group.activities
                                   .map(
-                                    (set) =>
-                                      `${set.weight !== undefined ? `${set.weight}${draft.units} ` : ""}${repLabel(set.reps)}`,
+                                    (a) =>
+                                      `${a.weight !== undefined ? `${a.weight}${units} ` : ""}${repLabel(a.reps)}`,
                                   )
                                   .join(", ")}
                           </td>
@@ -420,17 +468,109 @@ export const BlockInputsPage = () => {
             </>
           ) : (
             <>
-              This creates a block starting {formatDate(draft.startDate)}. Choosing today's date
-              while a block is running effectively resets it — the newer block becomes the live one
-              from its start date onward.
+              This creates a block starting {formatDate(startDate)}. Choosing today's date while a
+              block is running effectively resets it — the newer block becomes the live one from its
+              start date onward.
             </>
           )}
         </p>
-        <button className="primary" type="button" onClick={create} disabled={saving}>
+        <button
+          className="primary"
+          type="button"
+          onClick={create}
+          disabled={saving || preview.length === 0}
+        >
           {saving ? "Saving…" : replacing ? "Replace block" : "Create block"}
         </button>
       </section>
     </>
+  );
+};
+
+/**
+ * One declared parameter, rendered by kind.
+ *
+ * The whole form is this function in a loop, which is what makes a new program a
+ * data change rather than a UI change.
+ */
+const ParameterField = ({
+  spec,
+  value,
+  units,
+  best,
+  options,
+  movementHint,
+  onChange,
+}: {
+  spec: ProgramParameterSpec;
+  value: string;
+  units: string;
+  best: PersonalBest | undefined;
+  options: string[];
+  movementHint: string | null;
+  onChange: (value: string) => void;
+}) => {
+  if (spec.kind === "exercise") {
+    return (
+      <Combobox
+        id={`param-${spec.key}`}
+        label={
+          <>
+            {spec.label}
+            {movementHint && <span className="muted"> — {movementHint}</span>}
+          </>
+        }
+        value={value}
+        options={options}
+        onChange={onChange}
+        placeholder="Search or type"
+      />
+    );
+  }
+
+  if (spec.kind === "choice") {
+    return (
+      <div className="field">
+        <label htmlFor={`param-${spec.key}`}>{spec.label}</label>
+        <select id={`param-${spec.key}`} value={value} onChange={(e) => onChange(e.target.value)}>
+          {(spec.options ?? []).map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        {spec.help && <span className="field__hint muted">{spec.help}</span>}
+      </div>
+    );
+  }
+
+  const step = spec.kind === "integer" ? "1" : spec.kind === "percentage" ? "0.5" : "2.5";
+
+  return (
+    <div className="field">
+      <label htmlFor={`param-${spec.key}`}>
+        {spec.label}
+        {(spec.kind === "oneRepMax" || spec.kind === "weight") && (
+          <span className="muted"> ({units})</span>
+        )}
+      </label>
+      <input
+        id={`param-${spec.key}`}
+        type="number"
+        min="0"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {/* The estimate from the log, offered rather than imposed. It is computed
+          from every activity ever recorded, so it is a better starting guess
+          than memory — but a max is a decision, and overwriting one silently
+          would be the wrong kind of help. */}
+      {(spec.kind === "oneRepMax" || spec.kind === "weight") && (
+        <Estimate best={best} onUse={onChange} />
+      )}
+      {spec.help && <span className="field__hint muted">{spec.help}</span>}
+    </div>
   );
 };
 

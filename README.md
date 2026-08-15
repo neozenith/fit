@@ -1,8 +1,9 @@
 # fit
 
-A strength-training tracker that replaces a spreadsheet implementation of the
-**Candito 6-Week Strength Program**. One user, three environments, one AWS
-account, and no compute running when nobody is looking at it.
+A strength-training tracker that replaces a spreadsheet. It ships the **Candito
+6-Week Strength Program**, **Wendler 5/3/1** and **StrongLifts 5×5**, and lets
+you build your own the same way they are built. One user, three environments,
+one AWS account, and no compute running when nobody is looking at it.
 
 ```
 fit-dev.jpeak.ai      fit-test.jpeak.ai      fit.jpeak.ai
@@ -10,22 +11,41 @@ fit-dev.jpeak.ai      fit-test.jpeak.ai      fit.jpeak.ai
 
 ## The idea
 
-A six-week block is a **projection of three numbers**. Your bench, squat and
-deadlift one-rep maxes — plus a units flag and a start date — determine every
-prescribed weight across roughly 22 sessions. Not one working weight is entered
-by hand.
+**The log is the point.** A logged set needs an exercise, a rep count and a
+timestamp, and nothing else. You can open the app at the rack and record what you
+just did with no plan, no block and no program involved. What you lifted is the
+data worth keeping.
 
-So the application does not store a training plan. It stores the three numbers
-and what you actually lifted, and recomputes the plan on every read. Correct a
-max and the whole block moves, instantly, in the browser.
+**A program is a convenience that suggests what to log.** It is a *parametrised*
+schedule: give it a few numbers and it rolls out into a **block** of dated
+sessions with every weight computed. Nothing prescribed is ever stored — correct
+a max and the whole block moves, instantly, in the browser.
 
-At the end of week 5 a single set of 1-4 reps at 97.5% becomes the seed for the
-next block, and the cycle restarts one step heavier. That recursion *is* the
-program.
+The vocabulary builds up from one atom:
+
+```
+Exercise           a movement — "Barbell Squat"
+ExerciseActivity   ONE set of reps of one Exercise
+  · Prescribed       what a plan suggests    (a rep SPEC, a load SPEC)
+  · Logged           what actually happened  (a rep COUNT, a weight)
+SessionPlan        an ordered list of prescribed activities
+Program            a parametrised schedule of SessionPlans
+Block              one instantiation of a Program, on the calendar
+```
+
+Prescribed and logged are deliberately **different types**. What you were told to
+do and what you did are not two states of one record, and keeping them apart is
+what stops the app reporting the first as though it were the second.
+
+**Your own programs are not a lesser feature.** A session plan you author is
+exactly the structure Candito emits, and it rolls out through exactly the same
+resolver — same percentage-of-a-max loads, same rounding, same irregular day
+offsets. The built-ins are TypeScript literals; yours are rows. Nothing else
+separates them.
 
 Read [`docs/domain-model.md`](docs/domain-model.md) for the full mechanics,
-including the two arithmetic bugs found in the source workbook and what was done
-about them.
+including how each program is parametrised and the two arithmetic bugs found in
+the source workbook.
 
 ## Getting started
 
@@ -174,7 +194,7 @@ so it cannot run in the pipeline it bootstraps.
 
 | Path | What |
 |---|---|
-| `packages/program/` | The program engine. Pure, dependency-free, 83 tests. |
+| `packages/program/` | The domain engine: the vocabulary, the three built-in programs, the one rollout. Pure and dependency-free. |
 | `api/` | The request handler, plus its Lambda and local adapters. |
 | `frontend/` | The SPA. |
 | `infra/bootstrap/` | The one layer a human runs. |

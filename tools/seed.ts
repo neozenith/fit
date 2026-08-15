@@ -15,7 +15,13 @@ import {
   ResourceNotFoundException,
 } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
-import { blockId, DEFAULT_ACCESSORIES, planSeason } from "@fit/program";
+import {
+  blockId,
+  CANDITO_6_WEEK,
+  DEFAULT_ACCESSORIES,
+  planSeason,
+  WENDLER_531,
+} from "@fit/program";
 
 const ENDPOINT = process.env["DYNAMODB_ENDPOINT"] ?? "http://localhost:8000";
 const PREFIX = process.env["TABLE_PREFIX"] ?? "fit-local";
@@ -28,7 +34,15 @@ const raw = new DynamoDBClient({
 });
 const db = DynamoDBDocumentClient.from(raw, { marshallOptions: { removeUndefinedValues: true } });
 
-const TABLES = ["blocks", "sets", "measurements", "cardio", "season", "catalogue"] as const;
+const TABLES = [
+  "blocks",
+  "sets",
+  "measurements",
+  "cardio",
+  "season",
+  "catalogue",
+  "programs",
+] as const;
 
 const ensureTable = async (logical: string): Promise<void> => {
   const TableName = `${PREFIX}-${logical}`;
@@ -88,12 +102,19 @@ const main = async (): Promise<void> => {
     pk,
     sk: `BLOCK#${startDate}#${currentId}`,
     blockId: currentId,
+    programId: CANDITO_6_WEEK.programId,
     startDate,
     units: "kg",
     // The source workbook's own seeds, so a local run reproduces exactly the
     // numbers the golden tests assert.
-    oneRepMax: { bench: 40, squat: 70, deadlift: 80 },
-    accessories: DEFAULT_ACCESSORIES,
+    parameters: {
+      bench: 40,
+      squat: 70,
+      deadlift: 80,
+      units: "kg",
+      ...DEFAULT_ACCESSORIES,
+      week6: "skip",
+    },
     createdAt: new Date().toISOString(),
     createdBy: "seed",
   });
@@ -104,24 +125,50 @@ const main = async (): Promise<void> => {
   const shift = (iso: string, days: number): string =>
     new Date(Date.parse(iso) + days * 86_400_000).toISOString().slice(0, 10);
 
-  for (const [offsetDays, maxes] of [
-    [-56, { bench: 37.5, squat: 65, deadlift: 75 }],
-    [+56, { bench: 42.5, squat: 75, deadlift: 85 }],
-  ] as const) {
-    const date = shift(startDate, offsetDays);
-    const id = blockId(date);
-    await put("blocks", {
-      pk,
-      sk: `BLOCK#${date}#${id}`,
-      blockId: id,
-      startDate: date,
+  // The PAST block is written in the PRE-REBUILD shape on purpose: nested
+  // `oneRepMax` and `accessories`, no `programId`, no `parameters`. It is the
+  // only way a local run and the e2e suite actually exercise the read-path
+  // adapter (ADR-0038) rather than merely trusting its unit tests.
+  const pastDate = shift(startDate, -56);
+  await put("blocks", {
+    pk,
+    sk: `BLOCK#${pastDate}#${blockId(pastDate)}`,
+    blockId: blockId(pastDate),
+    startDate: pastDate,
+    units: "kg",
+    oneRepMax: { bench: 37.5, squat: 65, deadlift: 75 },
+    accessories: DEFAULT_ACCESSORIES,
+    createdAt: new Date().toISOString(),
+    createdBy: "seed",
+  });
+
+  // The PLANNED block runs a DIFFERENT program, so a local run shows the thing
+  // a single-program seed cannot: two blocks on one timeline whose sessions,
+  // week counts and parameters have nothing in common.
+  const futureDate = shift(startDate, 56);
+  await put("blocks", {
+    pk,
+    sk: `BLOCK#${futureDate}#${blockId(futureDate)}`,
+    blockId: blockId(futureDate),
+    programId: WENDLER_531.programId,
+    startDate: futureDate,
+    units: "kg",
+    parameters: {
+      squat: 75,
+      bench: 42.5,
+      deadlift: 85,
+      press: 30,
       units: "kg",
-      oneRepMax: maxes,
-      accessories: DEFAULT_ACCESSORIES,
-      createdAt: new Date().toISOString(),
-      createdBy: "seed",
-    });
-  }
+      trainingMaxPct: 90,
+      cycles: 2,
+      assistance: "bbb",
+      bbbPct: 50,
+      pull: "Barbell Row",
+      single: "Hanging Leg Raise",
+    },
+    createdAt: new Date().toISOString(),
+    createdBy: "seed",
+  });
 
   // A handful of logged sets across the first fortnight, so the progress chart
   // and the personal-bests panel have something real to render.

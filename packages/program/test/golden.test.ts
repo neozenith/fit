@@ -1,29 +1,52 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_ACCESSORIES } from "../src/defaults.js";
-import { generateBlock } from "../src/program.js";
-import type { BlockConfig, PrescribedExercise, Session } from "../src/types.js";
+import { type ExerciseGroup, groupByExercise } from "../src/plan.js";
+import { CANDITO_6_WEEK } from "../src/programs/candito.js";
+import { rolloutBlock } from "../src/rollout.js";
+import type { BlockConfig, ProgramParameters, Session } from "../src/types.js";
 
 /**
  * Golden tests against the source spreadsheet.
  *
- * Every expected weight below was read out of the workbook's own computed
- * cells with these exact seeds, so a failure here means the engine and the
- * spreadsheet disagree — which is the only regression that matters for
- * ADR-0001's claim that the program is a faithful pure function.
+ * Every expected weight below was read out of the workbook's own computed cells
+ * with these exact seeds, so a failure here means the engine and the spreadsheet
+ * disagree — the only regression that matters for ADR-0001's claim that the
+ * program is a faithful pure function.
  *
  * Two expectations deliberately differ from the sheet; both are marked
  * DEVIATION and explained in `docs/questions/Q01-spreadsheet-formula-deviations.md`.
+ *
+ * These numbers did not change when the domain model was rebuilt around
+ * Program/Block/SessionPlan (ADR-0036). That is the point of running them: the
+ * vocabulary moved, the arithmetic did not.
  */
 
-const CONFIG: BlockConfig = {
-  blockId: "golden",
-  startDate: "2026-01-05",
+const PARAMS: ProgramParameters = {
+  bench: 40,
+  squat: 70,
+  deadlift: 80,
   units: "kg",
-  oneRepMax: { bench: 40, squat: 70, deadlift: 80 },
-  accessories: DEFAULT_ACCESSORIES,
+  upperBackHorizontal: "Barbell Row",
+  shoulder: "Dumbbell Shoulder Press",
+  upperBackVertical: "Lat Pulldown",
+  optional1: "Barbell Curl",
+  optional2: "Tricep Pushdown",
+  optionalLower1: "Leg Press",
+  optionalLower2: "Standing Calf Raise",
+  deadliftVariation: "Romanian Deadlift",
+  week6: "skip",
 };
 
-const block = generateBlock(CONFIG);
+const configWith = (week6: string): BlockConfig => ({
+  blockId: "B-20260105",
+  programId: CANDITO_6_WEEK.programId,
+  startDate: "2026-01-05",
+  units: "kg",
+  parameters: { ...PARAMS, week6 },
+});
+
+const CONFIG = configWith("skip");
+const roll = (week6 = "skip"): Session[] => rolloutBlock(CANDITO_6_WEEK, configWith(week6));
+const block = roll();
 
 const session = (week: number, day: number): Session => {
   const found = block.find((s) => s.week === week && s.day === day);
@@ -31,14 +54,21 @@ const session = (week: number, day: number): Session => {
   return found;
 };
 
-const lift = (s: Session, exercise: string): PrescribedExercise => {
-  const found = s.exercises.find((e) => e.exercise === exercise);
+/**
+ * One exercise's activities, regrouped.
+ *
+ * A session is a FLAT list of one activity per set now, so every assertion that
+ * used to read `exercise.sets` reads a group's activities instead. The grouping
+ * is a view, deliberately not a stored shape (`plan.ts`).
+ */
+const lift = (s: Session, exercise: string): ExerciseGroup => {
+  const found = groupByExercise(s.activities).find((g) => g.exercise === exercise);
   if (!found) throw new Error(`No "${exercise}" in week ${s.week} day ${s.day}`);
   return found;
 };
 
 const weights = (s: Session, exercise: string): (number | undefined)[] =>
-  lift(s, exercise).sets.map((set) => set.weight);
+  lift(s, exercise).activities.map((a) => a.weight);
 
 describe("dates follow the sheet's day offsets from the start date", () => {
   test.each([
@@ -90,18 +120,18 @@ describe("week 1 — muscular conditioning", () => {
 
   test("day 5 is a single max-reps bench set at 80%", () => {
     const bench = lift(session(1, 5), "Bench Press");
-    expect(bench.sets).toHaveLength(1);
-    expect(bench.sets[0]?.weight).toBe(32.5);
-    expect(bench.sets[0]?.reps).toEqual({ kind: "maxReps" });
+    expect(bench.activities).toHaveLength(1);
+    expect(bench.activities[0]?.weight).toBe(32.5);
+    expect(bench.activities[0]?.reps).toEqual({ kind: "maxReps" });
   });
 });
 
 describe("week 2 — hypertrophy with feedback rules", () => {
   test("day 1 squat is a capped max-reps set carrying the extra-volume rule", () => {
     const squat = lift(session(2, 1), "Squat");
-    expect(squat.sets[0]?.weight).toBe(55);
-    expect(squat.sets[0]?.reps).toEqual({ kind: "maxRepsCapped", cap: 10 });
-    expect(squat.conditional?.outcomes).toHaveLength(2);
+    expect(squat.activities[0]?.weight).toBe(55);
+    expect(squat.activities[0]?.reps).toEqual({ kind: "maxRepsCapped", cap: 10 });
+    expect(squat.activities[0]?.conditional?.outcomes).toHaveLength(2);
   });
 
   test("day 2 bench nudges the top set one increment above 80%", () => {
@@ -110,8 +140,13 @@ describe("week 2 — hypertrophy with feedback rules", () => {
 
   test("day 3 squat sits one increment above day 1 and carries the back-off rule", () => {
     const squat = lift(session(2, 3), "Squat");
-    expect(squat.sets[0]?.weight).toBe(57.5);
-    expect(squat.conditional?.outcomes.map((o) => o.work?.sets)).toEqual([10, 8, 5, undefined]);
+    expect(squat.activities[0]?.weight).toBe(57.5);
+    expect(squat.activities[0]?.conditional?.outcomes.map((o) => o.work?.sets)).toEqual([
+      10,
+      8,
+      5,
+      undefined,
+    ]);
   });
 
   test("day 5 bench sits one increment below 80%", () => {
@@ -141,7 +176,7 @@ describe("week 3 — linear max overload", () => {
 
   test("weeks 3 accessory work drops the optional lifts entirely", () => {
     expect(session(3, 1).notes).toContain("No accessory lifts.");
-    expect(session(3, 2).exercises.some((e) => e.role === "optional")).toBe(false);
+    expect(session(3, 2).activities.some((a) => a.role === "optional")).toBe(false);
   });
 });
 
@@ -178,7 +213,7 @@ describe("week 5 — the test week", () => {
       [5, 2, "Bench Press"],
       [5, 3, "Deadlift"],
     ] as const) {
-      expect(lift(session(week, day), name).sets[0]?.reps).toEqual({
+      expect(lift(session(week, day), name).activities[0]?.reps).toEqual({
         kind: "range",
         min: 1,
         max: 4,
@@ -193,19 +228,19 @@ describe("week 5 — the test week", () => {
 
 describe("week 6 options", () => {
   test("skip yields no sessions", () => {
-    expect(generateBlock(CONFIG, "skip").filter((s) => s.week === 6)).toHaveLength(0);
+    expect(roll("skip").filter((s) => s.week === 6)).toHaveLength(0);
   });
 
   test("deload replays week 1 minus its final upper day", () => {
-    const deload = generateBlock(CONFIG, "deload").filter((s) => s.week === 6);
+    const deload = roll("deload").filter((s) => s.week === 6);
     expect(deload).toHaveLength(4);
     expect(deload.map((s) => s.day)).toEqual([1, 2, 3, 4]);
     expect(deload[0]?.date).toBe("2026-02-09");
   });
 
   test("test yields one single-rep session per lift", () => {
-    const retest = generateBlock(CONFIG, "test").filter((s) => s.week === 6);
-    expect(retest.map((s) => s.exercises[0]?.exercise)).toEqual([
+    const retest = roll("test").filter((s) => s.week === 6);
+    expect(retest.map((s) => s.activities[0]?.exercise)).toEqual([
       "Squat",
       "Bench Press",
       "Deadlift",
@@ -213,8 +248,37 @@ describe("week 6 options", () => {
   });
 });
 
+describe("the flat activity model", () => {
+  test("a four-set exercise is four activities, numbered 1 to 4", () => {
+    const squat = lift(session(1, 1), "Squat");
+    expect(squat.activities.map((a) => a.setIndex)).toEqual([1, 2, 3, 4]);
+  });
+
+  test("set numbering restarts per exercise, not per session", () => {
+    // Squat is sets 1-4 and deadlift 1-2 in the SAME session. Numbering across
+    // the session instead would make the deadlift "sets 5 and 6", which is not
+    // what anybody counts at the bar.
+    expect(lift(session(1, 1), "Deadlift").activities.map((a) => a.setIndex)).toEqual([1, 2]);
+  });
+
+  test("a free-choice accessory survives as an unprescribed activity", () => {
+    // It must NOT vanish: an exercise dropped for having no prescribed sets is
+    // how a completion denominator comes to disagree with what is on screen.
+    const curl = lift(session(1, 1), "Barbell Curl");
+    expect(curl.activities).toHaveLength(1);
+    expect(curl.activities[0]?.reps.kind).toBe("unprescribed");
+    expect(curl.activities[0]?.weight).toBeUndefined();
+  });
+
+  test("every session is addressable by its own reference", () => {
+    expect(session(5, 1).sessionRef).toBe("B-20260105-W5D1");
+  });
+});
+
 describe("nothing prescribed depends on wall-clock time (ADR-0001)", () => {
   test("regenerating the same config is byte-identical", () => {
-    expect(JSON.stringify(generateBlock(CONFIG))).toBe(JSON.stringify(generateBlock(CONFIG)));
+    expect(JSON.stringify(rolloutBlock(CANDITO_6_WEEK, CONFIG))).toBe(
+      JSON.stringify(rolloutBlock(CANDITO_6_WEEK, CONFIG)),
+    );
   });
 });

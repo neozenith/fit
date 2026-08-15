@@ -68,11 +68,13 @@ typecheck: ## Typecheck every TypeScript workspace
 
 .PHONY: test
 test: ## Run unit tests
-	# Both paths, explicitly. `bun test packages` alone left the edge
+	# Every path, explicitly. `bun test packages` alone left the edge
 	# authenticator's suite — the security boundary — running only when someone
 	# thought to invoke it by hand, which is the same silent gap the typecheck
-	# target above was widened to close.
-	bun test packages infra/modules/edge/src/auth
+	# target above was widened to close. `api/src` joined the list when the
+	# read-path adapter for pre-rebuild blocks landed there: it is the one piece
+	# of code whose failure looks like history disappearing.
+	bun test packages api/src infra/modules/edge/src/auth
 
 .PHONY: history
 history: ## Curate reference/*.xlsx into Parquet under reference/history/

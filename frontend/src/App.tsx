@@ -12,6 +12,7 @@ import { LogPage } from "./pages/Log.jsx";
 import { LogAnythingPage } from "./pages/LogAnything.jsx";
 import { MeasurementsPage } from "./pages/Measurements.jsx";
 import { OverviewPage } from "./pages/Overview.jsx";
+import { PlansPage } from "./pages/Plans.jsx";
 import { ProgressPage } from "./pages/Progress.jsx";
 import { HeaderProgress } from "./progress-bar.jsx";
 import { useLinkInterception, usePath } from "./router.jsx";
@@ -64,11 +65,19 @@ const ROUTES: Route[] = [
   // inputs before the page that needs them.
   {
     path: "/block-inputs",
-    label: "Block inputs",
+    label: "Start a block",
     icon: "\u{1F3AF}",
     section: "Train",
     render: () => <BlockInputsPage />,
     aliases: ["/block"],
+  },
+  {
+    path: "/plans",
+    label: "Session plans",
+    icon: "\u{1F9F1}",
+    section: "Train",
+    render: () => <PlansPage />,
+    aliases: ["/programs"],
   },
   {
     path: "/log",

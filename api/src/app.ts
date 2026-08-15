@@ -1,16 +1,22 @@
 import {
   type BlockConfig,
   blockId as blockIdFor,
-  DEFAULT_ACCESSORIES,
+  buildSessionPlan,
+  type CustomProgramDefinition,
   estimatedOneRepMax,
   expandSeason,
-  generateBlock,
+  groupByExercise,
   LIFT_LABELS,
+  type LoggedExerciseActivity,
   type MeasurementRecord,
+  type Program,
   personalBests,
   proposeNextBlock,
-  type SetRecord,
+  rolloutBlock,
+  type Session,
+  sessionRef as sessionRefFor,
   weeklyMedians,
+  withDefaults,
 } from "@fit/program";
 import { z } from "zod";
 import { curateExercise, listCatalogue } from "./catalogue.js";
@@ -27,17 +33,29 @@ import {
   volume as historyVolume,
 } from "./history.js";
 import { type Identity, UnauthenticatedError, userKey, verifyIdentity } from "./identity.js";
+import { activitiesFromBody, adaptBlock } from "./legacy.js";
+import {
+  definitionWarnings,
+  listPlans,
+  listProgramDefinitions,
+  listPrograms,
+  putPlan,
+  putProgramDefinition,
+  resolveProgram,
+} from "./programs.js";
 import { type Item, putItem, putItems, queryByType, sortKey } from "./repo.js";
 import {
   blockStateSchema,
   catalogueEntrySchema,
   createBlockSchema,
+  customProgramSchema,
   finopsQuerySchema,
   historyVolumeQuerySchema,
   historyWindowSchema,
-  logSetsSchema,
+  logActivitiesSchema,
   measurementSchema,
   seasonPlanSchema,
+  sessionPlanSchema,
   testResultsSchema,
   vocabularyWordSchema,
 } from "./schemas.js";
@@ -80,8 +98,21 @@ const stripKeys = <T>(item: T & Item): T => {
   return rest as T;
 };
 
+/**
+ * Instantiate a Program into a Block.
+ *
+ * The Program is resolved and VALIDATED before anything is written: a block
+ * naming a program that does not exist is unrenderable forever, and the only
+ * moment that is cheap to catch is here.
+ */
 const createBlock = async (ctx: Context, body: unknown): Promise<Response> => {
   const input = createBlockSchema.parse(body);
+
+  const program = await resolveProgram(ctx.identity, input.programId);
+  if (!program) {
+    return json({ error: "program_not_found", programId: input.programId }, 404);
+  }
+
   // The identity IS the start date (ADR-0033). Two blocks starting the same day
   // are the same block, so supersede falls out of the key rather than being
   // enforced beside it — and a plain string sort is chronological order.
@@ -89,17 +120,17 @@ const createBlock = async (ctx: Context, body: unknown): Promise<Response> => {
 
   const config: BlockConfig = {
     blockId: id,
+    programId: program.programId,
     startDate: input.startDate,
     units: input.units,
-    oneRepMax: input.oneRepMax,
-    // Explicitly drop undefined keys before merging. A partial object from zod
-    // carries absent fields as `undefined` PROPERTIES, and spreading it would
-    // overwrite each default with undefined rather than leaving it in place.
-    accessories: {
-      ...DEFAULT_ACCESSORIES,
-      ...Object.fromEntries(
-        Object.entries(input.accessories ?? {}).filter(([, v]) => v !== undefined),
-      ),
+    // Declared defaults filled in server-side, so a client that omits an
+    // optional parameter gets the same block as one that sent the default —
+    // rather than a block whose sessions quietly differ.
+    parameters: {
+      ...withDefaults(program, input.parameters),
+      // Mirrored into the bag because a schedule needs the increment to size a
+      // feedback rule's weight delta, and `schedule` only ever sees parameters.
+      units: input.units,
     },
     ...(input.derivedFrom ? { derivedFrom: input.derivedFrom } : {}),
   };
@@ -115,31 +146,50 @@ const createBlock = async (ctx: Context, body: unknown): Promise<Response> => {
     createdBy: ctx.identity.actor,
   });
 
-  return json({ block: config }, 201);
+  return json({ block: config, program: programSummary(program) }, 201);
 };
 
+/** What the SPA needs about a program without shipping it the schedule function. */
+const programSummary = (program: Program) => ({
+  programId: program.programId,
+  name: program.name,
+  description: program.description,
+  attribution: program.attribution ?? null,
+  origin: program.origin,
+  parameters: program.parameters,
+});
+
 /**
- * The prescription. Nothing here is read from storage except the block config —
- * every weight is computed on the spot (ADR-0001).
+ * The prescription. Nothing here is read from storage except the block config
+ * and its program — every weight is computed on the spot (ADR-0001).
  */
-const getSessions = async (
-  ctx: Context,
-  blockId: string,
-  weekSixChoice: string | null,
-): Promise<Response> => {
-  const block = await findBlock(ctx, blockId);
-  if (!block) return json({ error: "block_not_found" }, 404);
+const getSessions = async (ctx: Context, blockId: string): Promise<Response> => {
+  const config = await findBlock(ctx, blockId);
+  if (!config) return json({ error: "block_not_found" }, 404);
 
-  const choice = weekSixChoice === "deload" || weekSixChoice === "test" ? weekSixChoice : "skip";
+  const program = await resolveProgram(ctx.identity, config.programId);
+  if (!program) {
+    // A custom program deleted out from under a block. Say so rather than
+    // returning an empty session list, which reads as "you have nothing to do".
+    return json({ error: "program_not_found", programId: config.programId }, 409);
+  }
 
-  return json({ block, sessions: generateBlock(block, choice) });
+  return json({
+    block: config,
+    program: programSummary(program),
+    sessions: rolloutBlock(program, config),
+  });
 };
 
 const findBlock = async (ctx: Context, blockId: string): Promise<BlockConfig | null> => {
-  const items = await queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK");
+  const items = await queryByType<Record<string, unknown>>(
+    "blocks",
+    userKey(ctx.identity),
+    "BLOCK",
+  );
   // Newest write first, so a superseded block resolves to its latest version.
-  const found = items.find((b) => b.blockId === blockId);
-  return found ? (stripKeys(found) as BlockConfig) : null;
+  const found = items.find((b) => b["blockId"] === blockId);
+  return found ? adaptBlock(found as never) : null;
 };
 
 /**
@@ -151,23 +201,21 @@ const findBlock = async (ctx: Context, blockId: string): Promise<BlockConfig | n
  * the newer of the two win. Every earlier version stays queryable, which is the
  * point of append-only: what you believed in March is still answerable.
  */
-const currentBlockOf = (items: Array<BlockConfig & Item>): BlockConfig | null => {
+const currentBlockOf = (items: Array<Record<string, unknown>>): BlockConfig | null => {
   const today = nowIso().slice(0, 10);
-  const started = items.filter((b) => b.startDate <= today);
+  const started = items.filter((b) => String(b["startDate"]) <= today);
   const pool = started.length > 0 ? started : items;
 
   const chosen = [...pool].sort(
     (a, b) =>
-      b.startDate.localeCompare(a.startDate) ||
+      String(b["startDate"]).localeCompare(String(a["startDate"])) ||
       // Latest WRITE wins a tie on start date. Without this the winner is
       // whichever `blockId` happened to sort last — a UUID, so effectively
       // random, and a correction would take effect only half the time.
-      String((b as { createdAt?: string }).createdAt ?? "").localeCompare(
-        String((a as { createdAt?: string }).createdAt ?? ""),
-      ),
+      String(b["createdAt"] ?? "").localeCompare(String(a["createdAt"] ?? "")),
   )[0];
 
-  return chosen ? (stripKeys(chosen) as BlockConfig) : null;
+  return chosen ? adaptBlock(chosen as never) : null;
 };
 
 /**
@@ -182,7 +230,7 @@ const currentBlockOf = (items: Array<BlockConfig & Item>): BlockConfig | null =>
  * from the moment it is logged, so progress is a fold over observations rather
  * than a status field that can disagree with them.
  */
-const sessionProgress = (records: SetRecord[], blockId: string) => {
+const sessionProgress = (records: LoggedActivity[], blockId: string) => {
   const byExercise: Record<string, Record<string, LoggedSet[]>> = {};
   for (const r of records) {
     if (r.blockId !== blockId || r.week === undefined || r.day === undefined) continue;
@@ -216,6 +264,33 @@ interface LoggedSet {
   weight?: number;
   setIndex?: number;
 }
+
+/**
+ * A logged activity as it comes back out of storage.
+ *
+ * `kind` and `id` are optional here and not on `LoggedExerciseActivity`, because
+ * five years of imported history and every pre-rebuild write predate both
+ * fields. Reading is where that has to be tolerated; writing is where it stops
+ * (ADR-0038) — every record written from now on carries them.
+ */
+type LoggedActivity = Omit<LoggedExerciseActivity, "kind" | "id"> & {
+  kind?: "logged";
+  id?: string;
+};
+
+/**
+ * How many prescribed activities a session's exercise needs before it is done.
+ *
+ * Grouped from the flat activity list, because "done" is a question about
+ * exercises and a session holds one record per set.
+ */
+const sessionRequirements = (session: Session): Array<{ exercise: string; need: number }> =>
+  groupByExercise(session.activities).map((group) => ({
+    exercise: group.exercise,
+    // An unprescribed exercise needs ONE logged activity: "do some rows" has no
+    // set count to satisfy.
+    need: Math.max(1, group.activities.filter((a) => a.reps.kind !== "unprescribed").length),
+  }));
 
 /**
  * Delete, restore and reset — as APPEND-ONLY state records.
@@ -280,65 +355,70 @@ const setBlockState = async (
  * read, and N queries would be N round trips to slice data already in memory.
  */
 const getBlocks = async (ctx: Context, url?: URL): Promise<Response> => {
-  const [items, states] = await Promise.all([
-    queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK"),
+  const [items, states, catalogue] = await Promise.all([
+    queryByType<Record<string, unknown>>("blocks", userKey(ctx.identity), "BLOCK"),
     blockStates(ctx),
+    listPrograms(ctx.identity),
   ]);
   const includeDeleted = url?.searchParams.get("deleted") === "true";
+  const byProgramId = new Map(catalogue.programs.map((p) => [p.programId, p]));
 
   // Newest write wins per identity. Superseded versions stay in the table and
   // stay queryable; they simply are not the block any more.
-  const latest = new Map<string, BlockConfig & Item>();
+  const latest = new Map<string, Record<string, unknown>>();
   for (const item of items) {
-    const existing = latest.get(item.blockId);
+    const blockId = String(item["blockId"]);
+    const existing = latest.get(blockId);
     const newer =
       !existing ||
-      String((item as { createdAt?: string }).createdAt ?? "").localeCompare(
-        String((existing as { createdAt?: string }).createdAt ?? ""),
-      ) > 0;
-    if (newer) latest.set(item.blockId, item);
+      String(item["createdAt"] ?? "").localeCompare(String(existing["createdAt"] ?? "")) > 0;
+    if (newer) latest.set(blockId, item);
   }
 
   const logged = (
-    await queryByType<SetRecord>("sets", userKey(ctx.identity), "SET", {
+    await queryByType<LoggedActivity>("sets", userKey(ctx.identity), "SET", {
       limit: 4000,
     })
-  ).map(stripKeys) as SetRecord[];
+  ).map(stripKeys) as LoggedActivity[];
 
   const blocks = [...latest.values()]
-    .filter((item) => includeDeleted || states.get(item.blockId)?.action !== "delete")
+    .filter((item) => includeDeleted || states.get(String(item["blockId"]))?.action !== "delete")
     .map((item) => {
-      const config = stripKeys(item) as BlockConfig;
-      const sessions = generateBlock(config);
+      const config = adaptBlock(item as never);
+      const program = byProgramId.get(config.programId);
+      // A block whose program no longer resolves still LISTS, with no sessions
+      // and a reason. Dropping it would hide training that actually happened.
+      const sessions: Session[] = program ? rolloutBlock(program, config) : [];
       const state = states.get(config.blockId);
-      // A reset is a WATERMARK, not an erasure: sets logged at or before it are
-      // excluded from progress and remain in the log, so "start this block
-      // again" costs nothing and loses nothing.
+      // A reset is a WATERMARK, not an erasure: activities logged at or before
+      // it are excluded from progress and remain in the log, so "start this
+      // block again" costs nothing and loses nothing.
       const since = state?.action === "reset" ? state.at : undefined;
       const progress = sessionProgress(
         since ? logged.filter((r) => r.timestamp > since) : logged,
         config.blockId,
       );
       const complete = sessions.filter((session) => {
-        const expected = session.exercises.filter((e) => e.sets.length > 0);
+        const required = sessionRequirements(session);
         return (
-          expected.length > 0 &&
-          expected.every(
-            (e) =>
-              (progress[`${session.week}-${session.day}`]?.[e.exercise]?.length ?? 0) >=
-              e.sets.length,
+          required.length > 0 &&
+          required.every(
+            (r) =>
+              (progress[`${session.week}-${session.day}`]?.[r.exercise]?.length ?? 0) >= r.need,
           )
         );
       }).length;
 
       return {
         block: config,
+        program: program ? programSummary(program) : null,
+        programMissing: !program,
         progress,
         sessionCount: sessions.length,
         completeCount: complete,
         firstDate: sessions[0]?.date ?? config.startDate,
         lastDate: sessions.at(-1)?.date ?? config.startDate,
-        supersededCount: items.filter((i) => i.blockId === config.blockId).length - 1,
+        supersededCount: items.filter((i) => String(i["blockId"]) === config.blockId).length - 1,
         deleted: state?.action === "delete",
         resetAt: since ?? null,
       };
@@ -346,32 +426,46 @@ const getBlocks = async (ctx: Context, url?: URL): Promise<Response> => {
     // Chronological, which for these identifiers is also lexicographic.
     .sort((a, b) => a.block.blockId.localeCompare(b.block.blockId));
 
-  return json({ blocks });
+  return json({ blocks, brokenPrograms: catalogue.broken });
 };
 
 const getCurrentBlock = async (ctx: Context): Promise<Response> => {
   const [items, states] = await Promise.all([
-    queryByType<BlockConfig>("blocks", userKey(ctx.identity), "BLOCK"),
+    queryByType<Record<string, unknown>>("blocks", userKey(ctx.identity), "BLOCK"),
     blockStates(ctx),
   ]);
   // A deleted block is not the current one, however recently it started.
   const config = currentBlockOf(
-    items.filter((item) => states.get(item.blockId)?.action !== "delete"),
+    items.filter((item) => states.get(String(item["blockId"]))?.action !== "delete"),
   );
-  if (!config) return json({ block: null, sessions: [], progress: {}, blockCount: items.length });
+  if (!config) {
+    return json({
+      block: null,
+      program: null,
+      sessions: [],
+      progress: {},
+      blockCount: items.length,
+    });
+  }
 
-  const logged = await queryByType<SetRecord>("sets", userKey(ctx.identity), "SET", {
-    limit: 2000,
-  });
+  const [program, logged] = await Promise.all([
+    resolveProgram(ctx.identity, config.programId),
+    queryByType<LoggedActivity>("sets", userKey(ctx.identity), "SET", { limit: 2000 }),
+  ]);
+
   const state = states.get(config.blockId);
   const since = state?.action === "reset" ? state.at : undefined;
-  const records = (logged.map(stripKeys) as SetRecord[]).filter(
+  const records = (logged.map(stripKeys) as LoggedActivity[]).filter(
     (r) => !since || r.timestamp > since,
   );
 
   return json({
     block: config,
-    sessions: generateBlock(config),
+    program: program ? programSummary(program) : null,
+    // Named explicitly rather than inferred from an empty session list, which
+    // is indistinguishable from "you have finished the block".
+    programMissing: !program,
+    sessions: program ? rolloutBlock(program, config) : [],
     progress: sessionProgress(records, config.blockId),
     // How many blocks exist at all. The difference between "you have never made
     // one" and "you have five and this is the live one" is the first thing the
@@ -403,41 +497,83 @@ const projectNextBlock = async (ctx: Context, body: unknown): Promise<Response> 
   });
 };
 
-const logSets = async (ctx: Context, body: unknown): Promise<Response> => {
-  const input = logSetsSchema.parse(body);
+/**
+ * Log what actually happened.
+ *
+ * The most important write in the application, and the one with the fewest
+ * requirements: an exercise, a rep count and a timestamp. Attribution to a block
+ * or a session is accepted when the client has it and never demanded (ADR-0036),
+ * so logging from the gym floor with no plan open is a first-class path rather
+ * than a degraded one.
+ *
+ * `sessionRef` is DERIVED when the client sent a block, week and day but no
+ * reference — the client should not have to know the reference format, and a
+ * single source for it means the log and the prescription cannot disagree about
+ * which session a set belongs to.
+ */
+const logActivities = async (ctx: Context, body: unknown): Promise<Response> => {
+  const input = logActivitiesSchema.parse(activitiesFromBody(body));
   const pk = userKey(ctx.identity);
 
-  const records = input.sets.map((s) => {
-    const timestamp = s.timestamp ?? nowIso();
+  const records = input.activities.map((a) => {
+    const timestamp = a.timestamp ?? nowIso();
     const id = newId();
+    const derivedRef =
+      a.sessionRef ??
+      (a.blockId !== undefined && a.week !== undefined && a.day !== undefined
+        ? sessionRefFor(a.blockId, a.week, a.day)
+        : undefined);
+
     return {
       pk,
       sk: sortKey("SET", timestamp, id),
       id,
-      ...s,
+      kind: "logged" as const,
+      ...a,
+      ...(derivedRef === undefined ? {} : { sessionRef: derivedRef }),
       timestamp,
       loggedBy: ctx.identity.actor,
     };
   });
 
   await putItems("sets", records);
-  return json({ written: records.length, sets: records.map(stripKeys) }, 201);
+  return json(
+    {
+      written: records.length,
+      activities: records.map(stripKeys),
+      // The pre-rebuild field name, still emitted so a browser tab open across
+      // the release keeps working (ADR-0038).
+      sets: records.map(stripKeys),
+    },
+    201,
+  );
 };
 
-const getSets = async (ctx: Context, url: URL): Promise<Response> => {
+const getActivities = async (ctx: Context, url: URL): Promise<Response> => {
   const since = url.searchParams.get("since") ?? undefined;
   const limit = Number(url.searchParams.get("limit") ?? "500");
+  const exercise = url.searchParams.get("exercise") ?? undefined;
 
-  const items = await queryByType<SetRecord>("sets", userKey(ctx.identity), "SET", {
+  const items = await queryByType<LoggedActivity>("sets", userKey(ctx.identity), "SET", {
     limit: Number.isFinite(limit) ? Math.min(limit, 2000) : 500,
     ...(since ? { since } : {}),
   });
 
-  const records = items.map(stripKeys) as SetRecord[];
+  const all = items.map(stripKeys) as LoggedActivity[];
+  // Filtered HERE rather than in the query: DynamoDB applies a filter
+  // expression after the read and bills for every item it discards, so a
+  // server-side filter on a non-key attribute costs exactly what this does and
+  // hides the fact.
+  const records = exercise
+    ? all.filter((r) => r.exercise.toLowerCase() === exercise.toLowerCase())
+    : all;
+
   return json({
+    activities: records,
+    /** @deprecated pre-rebuild field name, kept for in-flight clients. */
     sets: records,
     // Computed here rather than stored, for the same reason prescriptions are
-    // (ADR-0001): a corrected set must not leave a stale best behind.
+    // (ADR-0001): a corrected activity must not leave a stale best behind.
     personalBests: personalBests(records, LIFT_LABELS),
   });
 };
@@ -509,11 +645,11 @@ const putSeason = async (ctx: Context, body: unknown): Promise<Response> => {
 };
 
 const getProgress = async (ctx: Context): Promise<Response> => {
-  const items = await queryByType<SetRecord>("sets", userKey(ctx.identity), "SET", {
+  const items = await queryByType<LoggedActivity>("sets", userKey(ctx.identity), "SET", {
     limit: 2000,
     ascending: true,
   });
-  const records = items.map(stripKeys) as SetRecord[];
+  const records = items.map(stripKeys) as LoggedActivity[];
 
   // Epley here, NOT the program's rep table. The two estimators are kept apart
   // deliberately so improving this chart can never change a training plan.
@@ -568,19 +704,98 @@ const ROUTES: Route[] = [
   {
     method: "GET",
     pattern: /^\/api\/blocks\/([^/]+)\/sessions$/,
-    handle: (ctx, _req, url, params) =>
-      getSessions(ctx, params[0] as string, url.searchParams.get("week6")),
+    handle: (ctx, _req, _url, params) => getSessions(ctx, params[0] as string),
   },
   {
     method: "POST",
     pattern: /^\/api\/blocks\/project$/,
     handle: async (ctx, req) => projectNextBlock(ctx, await req.json()),
   },
-  { method: "GET", pattern: /^\/api\/sets$/, handle: (ctx, _req, url) => getSets(ctx, url) },
+
+  // --- Programs ---------------------------------------------------------------
+  // Built-in and custom in ONE list, and deliberately indistinguishable except
+  // for `origin` (ADR-0037). Nothing downstream branches on which kind it is.
+  {
+    method: "GET",
+    pattern: /^\/api\/programs$/,
+    handle: async (ctx) => {
+      const [{ programs, broken }, definitions] = await Promise.all([
+        listPrograms(ctx.identity),
+        listProgramDefinitions(ctx.identity),
+      ]);
+      return json({
+        programs: programs.map(programSummary),
+        // The raw definitions too, because a `Program` carries its schedule as a
+        // FUNCTION and JSON cannot. The SPA compiles these against the plans to
+        // preview a custom block in the browser, using the same module the
+        // server uses (ADR-0019) — without them the preview would be empty and
+        // look like a program that prescribes nothing.
+        definitions,
+        broken,
+      });
+    },
+  },
+  {
+    method: "PUT",
+    pattern: /^\/api\/programs$/,
+    handle: async (ctx, req) => {
+      const definition = customProgramSchema.parse(await req.json()) as CustomProgramDefinition;
+      const [saved, warnings] = await Promise.all([
+        putProgramDefinition(ctx.identity, definition),
+        definitionWarnings(ctx.identity, definition),
+      ]);
+      // Warnings, not a 400: an author mid-edit routinely has a dangling
+      // reference, and rejecting it would make the editor unusable.
+      return json({ program: saved, warnings });
+    },
+  },
+
+  // --- Session plans ----------------------------------------------------------
+  // The authoring primitive. A plan is exactly what a built-in program emits,
+  // which is what makes "build your own" a real capability rather than a
+  // simplified one.
+  {
+    method: "GET",
+    pattern: /^\/api\/plans$/,
+    handle: async (ctx) => json({ plans: await listPlans(ctx.identity) }),
+  },
+  {
+    method: "PUT",
+    pattern: /^\/api\/plans$/,
+    handle: async (ctx, req) => {
+      const input = sessionPlanSchema.parse(await req.json());
+      // Rebuilt through `buildSessionPlan` so the server re-derives `setIndex`
+      // from position. Trusting the client's numbering would let a reordered or
+      // partially-deleted list leave a gap.
+      const plan = buildSessionPlan(input.planId, input.name, input.activities, {
+        notes: input.notes,
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(input.intensityLabel === undefined ? {} : { intensityLabel: input.intensityLabel }),
+      });
+      return json({ plan: await putPlan(ctx.identity, plan) });
+    },
+  },
+
+  // --- Logged activities ------------------------------------------------------
+  // The primary write. Attribution to a block or a session is optional metadata,
+  // never a requirement (ADR-0036).
+  {
+    method: "GET",
+    pattern: /^\/api\/activities$/,
+    handle: (ctx, _req, url) => getActivities(ctx, url),
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/activities$/,
+    handle: async (ctx, req) => logActivities(ctx, await req.json()),
+  },
+  // The pre-rebuild paths, still routed. A browser tab open across the release
+  // keeps working rather than losing a session's work (ADR-0038).
+  { method: "GET", pattern: /^\/api\/sets$/, handle: (ctx, _req, url) => getActivities(ctx, url) },
   {
     method: "POST",
     pattern: /^\/api\/sets$/,
-    handle: async (ctx, req) => logSets(ctx, await req.json()),
+    handle: async (ctx, req) => logActivities(ctx, await req.json()),
   },
   {
     method: "GET",

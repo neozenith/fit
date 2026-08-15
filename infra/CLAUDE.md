@@ -82,6 +82,24 @@ per stack, chained with `needs`.
   `AccessDeniedException … not authorized to perform: dynamodb:Query`, on exactly
   the routes touching the new table, with every other route green. `make ci` now
   fails on the mismatch (`make tf-tables`) and names which list is short.
+- **A cross-stack release is THREE red workflows for ONE cause, in every
+  environment.** Adding a table taught this the long way in v0.11.0: `TF api`
+  fails its plan on the parameter `data` has only just created, and both
+  `Deploy frontend` and `Verify` fail their smoke on routes the un-applied API
+  does not serve yet. Three reds, one root cause, one fix — let `data` finish,
+  re-run `TF api`, then re-run the two smoke workflows. Read a red tag run by
+  cause, not by count.
+- **`Verify`'s browser suite races CloudFront invalidation.** Re-running it in
+  the same breath as `Deploy frontend` fails with `element(s) not found` on
+  whichever pages the change touched, because the edge is still serving the
+  previous bundle. Re-run it *after* the frontend deploy reports success, not
+  alongside it.
+- **The Playwright suite is flaky against a deployed environment at default
+  concurrency, and is not flaky serially.** Parallel workers each wake a cold
+  Lambda that pays DuckDB's ~7s initialisation, so a different handful of tests
+  times out on every run while each one passes in isolation. `--workers=1` is
+  the honest way to read a deployed result: 45/45 dev, 44/44 test, 37/37 prod on
+  the release that produced this note.
 - **The DuckDB layer cannot be built by `bun install`.** The native binding is
   an *optional dependency* selected by `os`/`cpu`, so any ordinary install
   resolves for the build host — a macOS laptop or an x86 runner — and publishes

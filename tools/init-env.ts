@@ -3,6 +3,7 @@
  * Give a deployed environment its first training block.
  *
  *   bun run tools/init-env.ts --env dev --squat 70 --bench 40 --deadlift 80
+ *   bun run tools/init-env.ts --env dev --program wendler-531 --squat 100
  *
  * Goes through the PUBLIC API with a minted session (ADR-0011) rather than
  * writing to DynamoDB directly. That is deliberate: a direct write would bypass
@@ -18,6 +19,7 @@
 import { createHmac } from "node:crypto";
 import { parseArgs } from "node:util";
 import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { DEFAULT_PROGRAM_ID } from "@fit/program";
 
 const HOSTS: Record<string, string> = {
   dev: "https://fit-dev.jpeak.ai",
@@ -56,6 +58,9 @@ const main = async (): Promise<void> => {
       squat: { type: "string", default: "70" },
       bench: { type: "string", default: "40" },
       deadlift: { type: "string", default: "80" },
+      // Which program to instantiate. Named rather than assumed: a block whose
+      // program is implicit is one nobody can re-roll correctly later.
+      program: { type: "string", default: DEFAULT_PROGRAM_ID },
       units: { type: "string", default: "kg" },
       start: { type: "string" },
       force: { type: "boolean", default: false },
@@ -137,9 +142,14 @@ const main = async (): Promise<void> => {
     method: "POST",
     headers: { ...auth, "content-type": "application/json" },
     body: JSON.stringify({
+      programId: values.program,
       startDate,
       units: values.units,
-      oneRepMax: {
+      // A flat parameter bag, because which keys a program needs is the
+      // PROGRAM's declaration and not this script's business (ADR-0036). The
+      // server fills in whatever the program declares a default for, so the
+      // three maxes below are enough for any of the built-ins that take maxes.
+      parameters: {
         squat: Number(values.squat),
         bench: Number(values.bench),
         deadlift: Number(values.deadlift),
@@ -154,6 +164,7 @@ const main = async (): Promise<void> => {
   const { block } = await readJson<{ block: { blockId: string } }>(response, "creating the block");
   console.log(
     `Created block ${block.blockId} in ${env}, starting ${startDate} ` +
+      `running ${values.program} ` +
       `(squat ${values.squat} / bench ${values.bench} / deadlift ${values.deadlift} ${values.units}).`,
   );
   console.log(`Open it at ${host.replace(":8787", ":5173")}`);

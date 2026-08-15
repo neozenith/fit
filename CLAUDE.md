@@ -66,6 +66,28 @@ touches AWS is a **sibling** target, never a dependency of `ci`.
 
 ## Known gotchas
 
+- **Adding a DynamoDB table means editing TWO files.** `infra/modules/data/main.tf`
+  creates it; `infra/stacks/api/main.tf` has a **literal** list of table names it
+  reads one SSM parameter each from, to build the API role's IAM policy. The
+  literal cannot be derived — a `for_each` over an SSM value is unknown at plan
+  time and would make a cold environment unplannable (ADR-0022).
+
+  When the two drift, terraform **plans clean and applies clean**, and the API
+  returns `502` with `AccessDeniedException` on exactly the routes touching the
+  new table. `make ci` now catches it (`make tf-tables`), which is the only
+  reason it is not a trap any more.
+
+- **A commit that adds an API route needs TWO passes.** `Deploy frontend` runs
+  `tools/smoke.ts` against the deployed environment and races `TF api` — separate
+  workflows, no ordering between them (ADR-0008 buys that independence
+  deliberately). Adding a route *and* its smoke check in one commit fails the
+  first frontend deploy with `HTTP 404 {"error":"not_found","path":"/api/…"}` on
+  exactly the new routes.
+
+  **Neither failure may be softened.** A smoke test that tolerated a missing
+  route would stop being able to detect a genuinely broken deploy. Re-run
+  `Deploy frontend` once `TF api` has applied.
+
 - **`config.json` for the edge function is not on disk.** Terraform's
   `archive_file` synthesizes it from `local.edge_config` at plan time, because
   Lambda@Edge has no environment variables (ADR-0017). Adding a source file to
